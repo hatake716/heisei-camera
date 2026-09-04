@@ -4,6 +4,3 @@ sdk.dir=/path/to/Android/Sdk
 # This shared Android origin does not uniquely identify this app. Live validation required.
 # For public distribution consider a dedicated HTTPS hosted viewer; see docs/FEASIBILITY.md.
 MAPS_EMBED_API_KEY=
-# Optional: separate restricted Street View Static API key, for metadata only.
-# Verify Android package + SHA-1 restrictions at the REST endpoint before distribution.
-STREET_VIEW_METADATA_API_KEY=

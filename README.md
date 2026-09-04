@@ -22,11 +22,11 @@
 
 Street View の表示を Maps SDK for Android から Maps Embed API へ変更し、背面カメラのプレビューから過去の風景へ切り替える構成にしています。GPS・ネットワークによる測位と姿勢センサーの追従は使用しません。
 
-Maps Embed API の利用料は無料で、リクエスト数の制限もありませんが、API キーが必要です。Google Cloud の設定とキー発行は未実施です。キー未設定の場合は過去画像の代わりに設定案内を表示します。確認済み・未確認の範囲は [検証記録](docs/VALIDATION.md) を参照してください。[Google の料金・利用条件](https://developers.google.com/maps/documentation/embed/usage-and-billing)
+Maps Embed API の利用料は無料で、リクエスト数の制限もありませんが、API キーが必要です。設定方法は下の「ローカル設定」を参照してください。キー未設定の場合は過去画像の代わりに設定案内を表示します。確認済み・未確認の範囲は [検証記録](docs/VALIDATION.md) を参照してください。[Google の料金・利用条件](https://developers.google.com/maps/documentation/embed/usage-and-billing)
 
-## 撮影時期とプライバシー
+## 表示とプライバシー
 
-任意の metadata 用キーを設定すると、選んだパノラマの撮影時期を表示します。Google が返した年月・年をそのまま使い、不明な月日を補いません。未取得の場合は `----.--` を表示します。カメラを使った日付ではありません。metadata 用キーがなくても、Embed 用キーがあれば過去の風景を閲覧できます。
+アプリ独自の撮影年月表示は行いません。埋め込み画面に Google が表示する撮影時期や帰属表示は、そのまま表示します。
 
 カメラはライブプレビューだけに使用し、映像を Google に送信したり、写真を記録したりはしません。結果画面ではカメラの使用を止めます。位置情報・マイク・写真へのアクセス権限は要求しません。[プライバシーポリシー](docs/PRIVACY.md)
 
@@ -41,7 +41,6 @@ Maps Embed API の利用料は無料で、リクエスト数の制限もあり�
 | 言語・UI | Kotlin / Jetpack Compose |
 | 現在の風景 | CameraX の背面カメラプレビュー |
 | 過去の風景 | Android WebView 内の Maps Embed API iframe |
-| 撮影時期 | Street View Static API の metadata（任意） |
 
 ## ローカル設定
 
@@ -50,15 +49,11 @@ Maps Embed API の利用料は無料で、リクエスト数の制限もあり�
 ```properties
 sdk.dir=/absolute/path/to/Android/Sdk
 MAPS_EMBED_API_KEY=YOUR_EMBED_API_KEY
-# 任意: 撮影時期を取得する場合のみ設定
-STREET_VIEW_METADATA_API_KEY=YOUR_SEPARATE_METADATA_KEY
 ```
 
-Google Cloud で Maps Embed API を有効にし、`MAPS_EMBED_API_KEY` の API 制限を **Maps Embed API**、アプリケーション制限を **ウェブサイト** に設定します。現在のローカル HTML のオリジンに合わせ、許可する HTTP リファラーは `https://appassets.androidplatform.net/*` とします。以前の `MAPS_API_KEY` は使用しません。Embed 用キーに Android パッケージ名・署名 SHA-1 の制限を設定する構成ではありません。[Embed API の設定](https://developers.google.com/maps/documentation/embed/get-api-key)、[リファラーの仕様](https://developers.google.com/maps/documentation/embed/embedding-map#referrer-information-and-api-key-restrictions)
+Google Cloud で Maps Embed API を有効にし、`MAPS_EMBED_API_KEY` の API 制限を **Maps Embed API**、アプリケーション制限を **ウェブサイト** に設定します。現在のローカル HTML のオリジンに合わせ、許可する HTTP リファラーは `https://appassets.androidplatform.net/*` とします。必要な API キーはこの1つです。Embed 用キーに Android パッケージ名・署名 SHA-1 の制限を設定する構成ではありません。[Embed API の設定](https://developers.google.com/maps/documentation/embed/get-api-key)、[リファラーの仕様](https://developers.google.com/maps/documentation/embed/embedding-map#referrer-information-and-api-key-restrictions)
 
 `appassets.androidplatform.net` は Android のローカル Web コンテンツで使われる共通オリジンです。このリファラーだけでは平成カメラ固有のアプリ識別になりません。実キーでの表示とリファラー制限は未検証です。一般配布前には専用の管理ドメインで HTML を配信する構成を含めて検討し、意図した制限が機能することを確認してください。キーの API 制限は Embed のみに維持します。[Android のローカル Web コンテンツ](https://developer.android.com/develop/ui/views/layout/webapps/load-local-content)
-
-`STREET_VIEW_METADATA_API_KEY` は、Street View Static API の metadata にだけ使用する別キーです。Android アプリ制限にはパッケージ名 `io.github.hatake716.heiseicamera` と実際の APK の署名 SHA-1 を登録します。この REST エンドポイントでアプリ制限が有効に働くかは実通信での確認が必要です。詳しくは [API キーと通信](docs/FEASIBILITY.md#api-キーと通信) を参照してください。
 
 ## ビルドと検証
 

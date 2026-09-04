@@ -10,7 +10,7 @@ import java.net.URLDecoder
 import java.util.Locale
 import kotlin.coroutines.coroutineContext
 
-data class PanoramaReference(val panoId: String, val suppliedDate: String? = null)
+data class PanoramaReference(val panoId: String)
 
 /** Accepts user-shared Maps links, without fetching imagery or looking up its history. */
 object PanoramaLinks {

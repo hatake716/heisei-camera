@@ -21,10 +21,6 @@ class CameraSession(private val context: Context, private val scope: CoroutineSc
     val viewEpoch: Int get() = viewer.epoch
     val pageState: EmbedPageState get() = viewer.pageState
 
-    var date by mutableStateOf<CaptureDate?>(null)
-        private set
-    var dateStatus by mutableStateOf("風景を選ぶと撮影年月を確認できます")
-        private set
     var message by mutableStateOf<String?>(null)
     var importing by mutableStateOf(false)
         private set
@@ -35,10 +31,7 @@ class CameraSession(private val context: Context, private val scope: CoroutineSc
         private set
 
     private var importVersion = 0L
-    private var metadataVersion = 0L
     private var importJob: Job? = null
-    private var metadataJob: Job? = null
-    private val metadata = PanoramaMetadataClient(context, BuildConfig.METADATA_API_KEY)
 
     private fun cancelImport() {
         importVersion++
@@ -46,18 +39,6 @@ class CameraSession(private val context: Context, private val scope: CoroutineSc
         importJob = null
         importing = false
         pendingImportLink = null
-    }
-
-    private fun clearMetadata() {
-        metadataVersion++
-        metadataJob?.cancel()
-        metadataJob = null
-        date = null
-        dateStatus = if (BuildConfig.METADATA_API_KEY.isBlank()) {
-            "撮影年月は Google の表示で確認してください"
-        } else {
-            "選択した画像の撮影年月を確認します"
-        }
     }
 
     fun importLink(text: String) {
@@ -104,7 +85,6 @@ class CameraSession(private val context: Context, private val scope: CoroutineSc
         }
         viewer = viewer.select(panoId)
         prefs.edit().putString("selected_pano", panoId).apply()
-        clearMetadata()
         message = "過去の風景を選びました。"
     }
 
@@ -115,11 +95,6 @@ class CameraSession(private val context: Context, private val scope: CoroutineSc
     fun markPageState(panoId: String, epoch: Int, state: EmbedPageState) {
         if (!viewer.matches(panoId, epoch)) return
         viewer = viewer.pageChanged(panoId, epoch, state)
-        if (state == EmbedPageState.PAGE_LOADED) {
-            if (date == null && metadataJob == null) requestSelectedMetadata(panoId, epoch)
-        } else {
-            clearMetadata()
-        }
     }
 
     /** Opens a read-only live WebView result; no bitmap or image file is created. */
@@ -128,40 +103,13 @@ class CameraSession(private val context: Context, private val scope: CoroutineSc
         val id = selectedPano ?: return false
         // Each camera-to-past transition creates a fresh iframe, including the same selection.
         viewer = viewer.select(id)
-        clearMetadata()
         message = null
         return true
     }
 
     fun resume() {
         viewer = selectedPano?.let(viewer::select) ?: viewer
-        clearMetadata()
         message = null
-    }
-
-    private fun requestSelectedMetadata(panoId: String, epoch: Int) {
-        if (BuildConfig.METADATA_API_KEY.isBlank() || !viewer.canLabelSelection(panoId, epoch)) return
-        val version = ++metadataVersion
-        dateStatus = "選択した画像の撮影年月を確認中"
-        metadataJob = scope.launch {
-            try {
-                val result = metadata.fetch(panoId)
-                if (version != metadataVersion || !viewer.canLabelSelection(panoId, epoch)) return@launch
-                when (result) {
-                    is MetadataResult.Success -> {
-                        date = result.date
-                        dateStatus = result.date?.let { "選択した画像：${it.eraLabel}" }
-                            ?: "選択した画像の撮影年月は不明です"
-                    }
-                    is MetadataResult.Failure -> {
-                        date = null
-                        dateStatus = "撮影年月は Google の表示で確認してください"
-                    }
-                }
-            } finally {
-                if (version == metadataVersion) metadataJob = null
-            }
-        }
     }
 
     fun saveBookmark(): Boolean {
@@ -190,7 +138,7 @@ class CameraSession(private val context: Context, private val scope: CoroutineSc
         (0 until minOf(entries.length(), 100)).mapNotNull { index ->
             runCatching {
                 val item = entries.getJSONObject(index)
-                // Existing bookmarks keep their original ID/date. The old SDK pose is ignored.
+                // Keep the original ID and registration timestamp; ignore the old SDK pose.
                 Bookmark(item.getString("id"), item.getLong("createdAt"))
             }.getOrNull()?.takeIf { PanoramaLinks.validPanoId(it.panoId) && it.createdAt > 0 }
         }.distinctBy { it.panoId }

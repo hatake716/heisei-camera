@@ -13,7 +13,4 @@ internal data class CameraViewerState(
 
     fun pageChanged(panoId: String, expectedEpoch: Int, value: EmbedPageState): CameraViewerState =
         if (matches(panoId, expectedEpoch)) copy(pageState = value) else this
-
-    fun canLabelSelection(panoId: String, expectedEpoch: Int): Boolean =
-        matches(panoId, expectedEpoch) && pageState == EmbedPageState.PAGE_LOADED
 }

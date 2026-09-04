@@ -34,7 +34,6 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
@@ -60,7 +59,6 @@ private val Cream = Color(0xFFFAFAFA)
 private val Muted = Color(0xFFA8A8A8)
 private val Accent = Color(0xFFFF70A7)
 private val StoryGradient = Brush.linearGradient(listOf(Color(0xFFFFC15E), Color(0xFFFF543E), Color(0xFFDC2C91), Color(0xFF8E43E7)))
-private val Amber = Color(0xFFFFB277)
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -205,7 +203,6 @@ fun HeiseiCameraApp(incomingLink: String?, consumeLink: () -> Unit) {
                 HorizontalDivider(color = Muted.copy(alpha = .2f), modifier = Modifier.padding(vertical = 12.dp))
                 Text("接続情報", fontWeight = FontWeight.Bold)
                 Text(if (BuildConfig.HAS_EMBED_KEY) "過去の風景の表示：設定済み" else "過去の風景の表示：API キー未設定", color = Muted, fontSize = 13.sp, modifier = Modifier.padding(top = 8.dp))
-                Text(session.dateStatus, color = Muted, fontSize = 12.sp, modifier = Modifier.padding(top = 4.dp))
                 Text("Maps Embed API の表示料金は無料です。開発者による API キーの設定が必要です。", color = Muted, fontSize = 13.sp, modifier = Modifier.padding(top = 12.dp))
                 TextButton(onClick = { openExternal(context, "https://github.com/hatake716/heisei-camera#ローカル設定") { session.message = it } }) { Text("開発者向けの設定手順") }
                 TextButton(onClick = { openExternal(context, "package:${context.packageName}", appSettings = true) { session.message = it } }) { Text("カメラの許可を変更する") }
@@ -278,15 +275,14 @@ private fun Finder(
                 }
             }
         }
-        // Date and all native controls sit outside the iframe, leaving Google attribution visible.
-        Row(Modifier.fillMaxWidth().background(Ink).height(58.dp).padding(horizontal = 14.dp), verticalAlignment = Alignment.CenterVertically) {
+        if (!showPast) Row(Modifier.fillMaxWidth().background(Ink).height(58.dp).padding(horizontal = 14.dp), verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
-                Text(if (showPast) "選んだ風景の撮影年月" else "今、この場所", color = Muted, fontSize = 10.sp)
-                Text(if (showPast) session.date?.eraLabel ?: "年月不明" else "LIVE CAMERA", color = if (showPast) Amber else Cream, fontSize = 12.sp, letterSpacing = 1.sp)
+                Text("今、この場所", color = Muted, fontSize = 10.sp)
+                Text("LIVE CAMERA", color = Cream, fontSize = 12.sp, letterSpacing = 1.sp)
             }
-            if (showPast) FilmDate(session.date?.display ?: "----.--", Modifier.width(118.dp).height(22.dp))
-            else Text("LIVE", color = Cream, fontWeight = FontWeight.SemiBold, fontSize = 13.sp, letterSpacing = 2.sp)
+            Text("LIVE", color = Cream, fontWeight = FontWeight.SemiBold, fontSize = 13.sp, letterSpacing = 2.sp)
         }
+
     }
 }
 
@@ -377,38 +373,6 @@ private fun Instruction(number: String, title: String, body: String) {
         Column {
             Text(title, fontWeight = FontWeight.Medium, fontSize = 15.sp)
             Text(body, color = Muted, fontSize = 13.sp, lineHeight = 21.sp, modifier = Modifier.padding(top = 5.dp))
-        }
-    }
-}
-
-/** Original seven-segment drawing: no font file, invented day, or imagery export. */
-@Composable
-private fun FilmDate(text: String, modifier: Modifier = Modifier) {
-    Canvas(modifier.semantics { contentDescription = "撮影年月 $text" }) {
-        val widths = text.map { if (it == '.') .4f else 1f }
-        val cell = size.width / (widths.sum() + (text.length - 1) * .2f)
-        val glyphWidth = cell * .8f
-        val height = size.height * .8f
-        val top = (size.height - height) / 2
-        var left = 0f
-        val segments = arrayOf("abcedf", "bc", "abdeg", "abcdg", "bcfg", "acdfg", "acdefg", "abc", "abcdefg", "abcdfg")
-        text.forEachIndexed { index, char ->
-            if (char == '.') drawCircle(Amber, cell * .075f, Offset(left + cell * .12f, top + height))
-            else {
-                val active = if (char.isDigit()) segments[char.digitToInt()] else "g"
-                val middle = top + height / 2
-                val right = left + glyphWidth
-                val bottom = top + height
-                val endpoints = mapOf('a' to (Offset(left, top) to Offset(right, top)),
-                    'b' to (Offset(right, top) to Offset(right, middle)), 'c' to (Offset(right, middle) to Offset(right, bottom)),
-                    'd' to (Offset(left, bottom) to Offset(right, bottom)), 'e' to (Offset(left, middle) to Offset(left, bottom)),
-                    'f' to (Offset(left, top) to Offset(left, middle)), 'g' to (Offset(left, middle) to Offset(right, middle)))
-                endpoints.forEach { (segment, points) ->
-                    drawLine(if (segment in active) Amber else Amber.copy(alpha = .045f), points.first, points.second,
-                        strokeWidth = cell * .09f, cap = StrokeCap.Round)
-                }
-            }
-            left += cell * (widths[index] + .2f)
         }
     }
 }

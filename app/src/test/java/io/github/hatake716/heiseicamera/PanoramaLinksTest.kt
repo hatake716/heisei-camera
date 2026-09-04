@@ -45,9 +45,9 @@ class PanoramaLinksTest {
         }
     }
 
-    @Test fun neverInterpretsMapsTimestampOrQueryDateAsCaptureDate() {
+    @Test fun ignoresUnrelatedTimestampAndDateQuery() {
         val link = "https://www.google.com/maps/@/data=!4v1234567890000!3m3!1s$pano!2e0?date=2008-09"
-        assertEquals(PanoramaReference(pano, suppliedDate = null), PanoramaLinks.parse(link))
+        assertEquals(PanoramaReference(pano), PanoramaLinks.parse(link))
         assertNull(PanoramaLinks.parse("https://www.google.com/maps/@/data=!4v1234567890000"))
     }
 
