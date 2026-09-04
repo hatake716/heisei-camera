@@ -1,36 +1,34 @@
 # 平成カメラ
 
-現在地から Google ストリートビューの過去の街並みを探し、スマートフォンをかざして眺める Android アプリです。Google マップで過去の撮影時期を選び、その画像の共有リンクを平成カメラで開くと、端末の向きに合わせて表示方向が変わります。画面には、実際に表示している画像の撮影時期を重ねます。
+スマートフォンをかざして現在の風景を見ながらシャッターを押すと、あらかじめ選んだ過去の Street View に切り替わる Android アプリです。起動時は背面カメラのライブプレビュー、シャッター後は過去の風景を一枚の写真のように眺める画面になります。「戻る」で現在のカメラへ戻ります。
 
-カメラ風の UI を持つ、Street View の閲覧アプリです。シャッター形のボタンは、表示中のパノラマと向きをブックマークします。写真撮影、ライブカメラ、Street View のスクリーンショット保存は行いません。
+画面は黒と白を基調に、ピンク・オレンジ・紫のアクセントと円形シャッターを組み合わせた、平成カメラ独自のカメラ UI です。
 
-## 現在の開発状況
-
-Google の過去の画像を閲覧する体験を優先した初期実装です。API キーの発行、Google Cloud の課金設定、アカウント操作は行っていません。キーを使った画像表示、撮影時期の取得、過去年を保った共有リンクの受け渡し、実機での姿勢追従は未検証です。ビルドやローカルテストの結果だけでは、これらの動作確認は完了しません。
-
-デバッグビルド、21 件のユニットテスト、Lint のエラーなしを確認しました。API キー未設定のエミュレーターで画面と共有リンク・位置権限の動作を確認しています。[検証記録](docs/VALIDATION.md)
-
-Google の公開 API には撮影履歴を列挙して最古の画像を指定する機能が確認できないため、最古の平成画像の選択は Google マップ上で手動で行います。初期要件からの変更と公式資料は [実現性と設計判断](docs/FEASIBILITY.md) にまとめています。
+**過去の風景は Google マップで事前に選びます。** カメラで見ている場所・向きを判定したり、現在地に対応する最古の画像を自動検索したりはしません。カメラ映像や Street View の写真・スクリーンショットをファイルへ保存する機能もありません。
 
 ## 使い方
 
-1. 位置情報を許可し、現在地付近の Street View を開きます。
-2. Google マップで同じ場所の Street View を開き、「他の日付を見る」から過去の撮影時期を選びます。平成の画像を探す場合は、表示される撮影時期を確認します。
-3. Google マップの共有から平成カメラを選ぶか、共有リンクをコピーして平成カメラに貼り付けます。
-4. 読み込まれた画像の撮影時期を確認し、端末を上下・左右に向けて風景を眺めます。
-5. 気に入った眺めはシャッター形のボタンでブックマークします。保存するのはパノラマ ID と表示方向で、画像データは保存しません。
+1. Google マップで見たい場所の Street View を開き、「他の日付を見る」から過去の撮影時期を選びます。
+2. Google マップの共有から平成カメラを選ぶか、共有リンクをコピーして平成カメラへ貼り付けます。最後に選んだ風景は次回起動にも引き継ぎます。
+3. 平成カメラでカメラ権限を許可し、背面カメラのプレビューで現在の風景を見ます。
+4. シャッター形のボタンを押すと、選んだ過去の風景へ切り替わります。過去画像が未選択の場合はリンクの取り込みへ進みます。
+5. 「戻る」でカメラへ戻ります。別の風景も残したい場合は、選んだ風景のリンクをしおりに保存できます。
 
-共有されたリンクの形式によっては、選択した過去の画像が含まれないことがあります。Google マップで選んだ年と、平成カメラに表示された撮影時期が一致するかを確認してください。リンクに画像を特定する情報がない場合や、SDK で画像を取得できない場合は、そのリンクから過去の画像を表示できません。
+結果画面の Street View は、指で向きや拡大率を変えない閲覧用の表示です。カメラの向きやシャッターを押した瞬間の構図とは連動しません。しおりに保存するのも選んだパノラマ ID であり、写真や撮影時の構図ではありません。
 
-過去の画像を開いた後は、歩いて現在地が変わってもその画像を維持します。「現在地」への切り替えは現在地付近の画像を改めて検索する操作で、平成の画像に限定されません。別の場所の過去を見たい場合は、その場所で撮影時期を選び直します。
+共有リンクに過去画像の ID が含まれない場合や、その ID を Embed API が表示できない場合があります。Google マップで選んだ時期と表示内容を確認してください。画像の可用性は Google 側の更新・削除によって変わります。[実現性と設計判断](docs/FEASIBILITY.md)
 
-## 表示と権限
+## 現在の開発状況
 
-- 撮影時期は Google が返した精度で表示します。年月があれば年月、年だけなら年を表示し、不明な月日を補いません。
-- 位置情報はアプリ表示中に GPS とネットワークの位置プロバイダーから取得します。バックグラウンドの位置追跡は行いません。
-- 方角と傾きには端末の姿勢センサーを使います。カメラ権限は使用しません。
-- Street View の撮影地点と現在地は異なる場合があります。端末の向きが合っていても、近くの物体の位置や見え方まで実景に重なるものではありません。
-- ブックマーク先の画像は Google 側の更新・削除により再表示できなくなる場合があります。
+Street View の表示を Maps SDK for Android から Maps Embed API へ変更し、背面カメラのプレビューから過去の風景へ切り替える構成にしています。GPS・ネットワークによる測位と姿勢センサーの追従は使用しません。
+
+Maps Embed API の利用料は無料で、リクエスト数の制限もありませんが、API キーが必要です。Google Cloud の設定とキー発行は未実施です。キー未設定の場合は過去画像の代わりに設定案内を表示します。確認済み・未確認の範囲は [検証記録](docs/VALIDATION.md) を参照してください。[Google の料金・利用条件](https://developers.google.com/maps/documentation/embed/usage-and-billing)
+
+## 撮影時期とプライバシー
+
+任意の metadata 用キーを設定すると、選んだパノラマの撮影時期を表示します。Google が返した年月・年をそのまま使い、不明な月日を補いません。未取得の場合は `----.--` を表示します。カメラを使った日付ではありません。metadata 用キーがなくても、Embed 用キーがあれば過去の風景を閲覧できます。
+
+カメラはライブプレビューだけに使用し、映像を Google に送信したり、写真を記録したりはしません。結果画面ではカメラの使用を止めます。位置情報・マイク・写真へのアクセス権限は要求しません。[プライバシーポリシー](docs/PRIVACY.md)
 
 ## 開発環境
 
@@ -41,25 +39,26 @@ Google の公開 API には撮影履歴を列挙して最古の画像を指定�
 | 対応 OS | Android 10 以上（minSdk 29） |
 | targetSdk | 36 |
 | 言語・UI | Kotlin / Jetpack Compose |
-| Street View | Maps SDK for Android |
-| 撮影時期 | Street View Static API の metadata |
-| 現在地 | Android `LocationManager` の GPS / NETWORK |
+| 現在の風景 | CameraX の背面カメラプレビュー |
+| 過去の風景 | Android WebView 内の Maps Embed API iframe |
+| 撮影時期 | Street View Static API の metadata（任意） |
 
 ## ローカル設定
 
-`local.properties.example` を `local.properties` にコピーし、Android SDK の場所と自分の API キーを設定します。`local.properties` は Git に含めません。
+`local.properties.example` を参考に、`local.properties` へ SDK の場所と API キーを設定します。既存の `local.properties` がある場合は SDK 設定を保持し、必要なキーを追記してください。このファイルは Git に含めません。
 
 ```properties
 sdk.dir=/absolute/path/to/Android/Sdk
-MAPS_API_KEY=YOUR_ANDROID_MAPS_SDK_KEY
+MAPS_EMBED_API_KEY=YOUR_EMBED_API_KEY
+# 任意: 撮影時期を取得する場合のみ設定
 STREET_VIEW_METADATA_API_KEY=YOUR_SEPARATE_METADATA_KEY
 ```
 
-`MAPS_API_KEY` は Maps SDK for Android 用です。Google Cloud で Maps SDK for Android を有効にし、キーの API 制限を同 SDK に、アプリケーション制限を Android アプリに設定します。登録するパッケージ名は `io.github.hatake716.heiseicamera`、署名証明書の SHA-1 は実際にインストールする APK のものを使用します。デバッグ署名と配布用署名は別です。
+Google Cloud で Maps Embed API を有効にし、`MAPS_EMBED_API_KEY` の API 制限を **Maps Embed API**、アプリケーション制限を **ウェブサイト** に設定します。現在のローカル HTML のオリジンに合わせ、許可する HTTP リファラーは `https://appassets.androidplatform.net/*` とします。以前の `MAPS_API_KEY` は使用しません。Embed 用キーに Android パッケージ名・署名 SHA-1 の制限を設定する構成ではありません。[Embed API の設定](https://developers.google.com/maps/documentation/embed/get-api-key)、[リファラーの仕様](https://developers.google.com/maps/documentation/embed/embedding-map#referrer-information-and-api-key-restrictions)
 
-`STREET_VIEW_METADATA_API_KEY` は Street View Static API の metadata 用の別キーです。同 API を有効にし、API 制限と Android アプリ制限を設定します。アプリはパッケージ名と署名証明書の SHA-1 を HTTP ヘッダーに付けて問い合わせます。Google は REST エンドポイントごとの制限対応確認を求めているため、公開前に**誤ったパッケージ名・証明書のリクエストが拒否されること**を確認してください。対応しない場合は、認証付きサーバーを経由する構成が必要です。設定の詳細は [実現性と設計判断](docs/FEASIBILITY.md#api-キーと-metadata-通信) を参照してください。
+`appassets.androidplatform.net` は Android のローカル Web コンテンツで使われる共通オリジンです。このリファラーだけでは平成カメラ固有のアプリ識別になりません。実キーでの表示とリファラー制限は未検証です。一般配布前には専用の管理ドメインで HTML を配信する構成を含めて検討し、意図した制限が機能することを確認してください。キーの API 制限は Embed のみに維持します。[Android のローカル Web コンテンツ](https://developer.android.com/develop/ui/views/layout/webapps/load-local-content)
 
-Street View の表示には Google Maps Platform のプロジェクトと課金設定が必要です。metadata の問い合わせは公式に無償とされていますが、Dynamic Street View の表示には別の料金体系が適用されます。[Street View の課金説明](https://developers.google.com/maps/documentation/android-sdk/streetview)、[metadata の説明](https://developers.google.com/maps/documentation/streetview/metadata)
+`STREET_VIEW_METADATA_API_KEY` は、Street View Static API の metadata にだけ使用する別キーです。Android アプリ制限にはパッケージ名 `io.github.hatake716.heiseicamera` と実際の APK の署名 SHA-1 を登録します。この REST エンドポイントでアプリ制限が有効に働くかは実通信での確認が必要です。詳しくは [API キーと通信](docs/FEASIBILITY.md#api-キーと通信) を参照してください。
 
 ## ビルドと検証
 
@@ -67,8 +66,4 @@ Street View の表示には Google Maps Platform のプロジェクトと課金�
 ./gradlew :app:assembleDebug :app:testDebugUnitTest :app:lintDebug
 ```
 
-デバッグ APK の出力先は `app/build/outputs/apk/debug/app-debug.apk` です。Google Play 開発者サービスが利用可能な端末で確認してください。
-
-API キーの設定後に必要な実機確認は、現在地での表示、過去の共有リンクと表示年月の一致、端末の上下・左右の動きとの一致、移動中の過去画像の維持、ブックマークからの再表示です。キー未設定時の画面確認と、Google の実画像を使った動作確認は別々に記録します。
-
-[プライバシーポリシー](docs/PRIVACY.md)
+デバッグ APK は `app/build/outputs/apk/debug/app-debug.apk` に出力されます。背面カメラ、Android System WebView、ネットワーク接続を利用できる環境で確認してください。カメラ権限・プレビューの確認と、Google の実画像を使う切り替え・再表示の確認は分けて記録します。

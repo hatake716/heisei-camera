@@ -2,85 +2,75 @@
 
 確認日: 2026-09-05
 
-平成カメラは、Google の過去の Street View を見る体験を優先します。Google マップで利用者が選んだ過去画像を共有リンクから受け取り、Maps SDK for Android で表示し、端末の向きに追従させる設計です。過去画像の自動選択と画像ファイル保存を、利用可能な公式機能であるかのようには扱いません。
+平成カメラは、起動時に背面カメラのライブプレビューを表示し、シャッターを押すと事前に選んだ過去の Street View を写真のように眺める画面へ切り替える構成です。過去の風景は Maps Embed API を WebView の iframe で表示します。従来の Maps SDK for Android、GPS・ネットワークによる測位、姿勢センサーによる追従は使用しません。
 
-## 要件と採用する動作
+## 採用する体験
 
-| 初期要件 | 採用する動作・確認結果 |
+| 項目 | 採用する動作 |
 | --- | --- |
-| 現在地を GPS と電波から算出 | アプリ表示中だけ `LocationManager` の GPS / NETWORK を使用する。 |
-| Google に登録された最古の平成画像 | Google マップの「他の日付を見る」で利用者が選ぶ。公開 API から全履歴を取得して最古を保証する経路は確認できない。 |
-| 撮影日を重ねて表示 | 実際に SDK が表示したパノラマ ID の metadata を問い合わせ、得られた年・年月をその精度のまま表示する。 |
-| 端末のカメラ方向に追従 | 背面方向を姿勢センサーから求め、Street View の方位・上下角に反映する。カメラ映像は取得しない。 |
-| 歩きながら過去の風景を見る | 選択した過去画像を維持する。移動しただけで別の撮影時期に置き換えない。次の地点の過去画像は再選択する。 |
-| カメラ風 UI のシャッター | パノラマ ID と表示方向をブックマークする。 |
-| 日付入りスクリーンショット保存 | 採用しない。Google の Geo Guidelines は Street View のスクリーンショットと埋め込み元からの画像の取り出しを禁止している。 |
+| 起動時 | カメラ権限を許可した端末で背面カメラのライブプレビューを表示する。 |
+| 過去の風景を選ぶ | Google マップの「他の日付を見る」で選び、共有リンクを取り込む。 |
+| シャッター | カメラのプレビュー開始後に押すと、選択済みの過去画像の表示に切り替える。未選択時はリンク取り込みへ進む。 |
+| 過去の風景 | 閲覧中の向き・拡大率の操作を止めた Embed を表示する。「戻る」でカメラへ戻る。 |
+| しおりと再起動 | 選んだパノラマ ID を端末内に保持し、その画像を再び開く。写真や構図は保存しない。 |
+| 撮影年月 | 任意の metadata キーで、選んだパノラマの撮影時期を取得し、iframe の外側に表示する。 |
+| 最古の平成画像 | 利用者が Google マップで撮影時期を比較して選ぶ。自動選択や最古の保証はしない。 |
 
-スクリーンショットに Google のロゴや撮影時期を残すだけで保存が許可される、という条件は公式資料にありません。ブックマークにも画像データは含めません。[Google Geo Guidelines](https://about.google/brand-resource-center/products-and-services/geo-guidelines/)
+背面カメラの画像から場所を特定する認識処理や、シャッターを押した向きと過去画像の向きを合わせる処理はありません。現在のプレビューと結果画面の関連付けは、利用者が同じ場所の過去画像を選ぶことによって行います。
+
+## カメラと静止画風の結果
+
+CameraX の Preview を背面カメラに接続します。写真撮影用の ImageCapture や動画録画は使いません。プレビューは端末内の表示にだけ使用し、画像を Google へ送信しません。結果画面へ切り替えるとカメラを解放し、戻るとプレビューを再開します。[CameraX: Preview](https://developer.android.com/media/camera/camerax/preview)
+
+シャッターを押しても、カメラや Street View のピクセルを取得して画像ファイルを生成する処理はありません。過去画像の結果画面は、操作を止めたオンラインの Embed です。Google 側の読み込みや進行中の表示アニメーションまで停止する保証はなく、保存された固定フレームではありません。
+
+Google の Geo Guidelines は Street View のスクリーンショットや埋め込み元からの画像の取り出しを認めていません。結果画面でも Google のロゴと帰属表示を遮らずに表示します。[Google Geo Guidelines](https://about.google/brand-resource-center/products-and-services/geo-guidelines/)
+
+## Embed API の役割と制約
+
+`streetview` モードにはパノラマ ID の `pano`、初期方位の `heading`、上下角の `pitch`、画角の `fov` を指定できます。一方、公開仕様には、iframe の現在の視点や画像 ID をアプリへ通知する API はありません。本実装は選んだ ID を初期表示で開き、表示方向の操作を提供しません。[Maps Embed API: Street View](https://developers.google.com/maps/documentation/embed/embedding-map#streetview_mode)
+
+しおりと最後の選択の保存はパノラマ ID を対象とし、カメラの向き、構図、拡大率を対象としません。旧版のしおりにあるパノラマ ID は保持しますが、旧 SDK の表示方向は再現しません。再表示するたびに、初期表示から開きます。
 
 ## 撮影履歴と共有リンク
 
-Google マップの「他の日付を見る」は、場所ごとの過去の Street View を利用者が選択するための機能です。過去画像がない場所では利用できません。この画面が提供されていることと、第三者アプリ向けの履歴一覧 API があることは別です。[Google Maps Help](https://support.google.com/maps/answer/3093484?hl=en-GB)
+Google マップの「他の日付を見る」は、過去画像が存在する地点で撮影時期を手動選択する機能です。Embed API の公開パラメーターには、撮影履歴の一覧取得や最古の画像を指定する条件はありません。[Google Maps Help](https://support.google.com/maps/answer/3093484?hl=en-GB)、[Embed API の仕様](https://developers.google.com/maps/documentation/embed/embedding-map)
 
-Android SDK の公開機能は、緯度経度・半径・屋外指定から適切なパノラマを検索する方法と、既知のパノラマ ID を指定する方法です。隣接パノラマへのリンクもありますが、同じ地点の歴代撮影一覧ではありません。確認した公開仕様には、撮影時期の検索条件や「最古」の指定はありません。[Maps SDK for Android: Street View](https://developers.google.com/maps/documentation/android-sdk/streetview#set_the_location_of_the_panorama)
+Android の共有操作（`ACTION_SEND`）とリンク貼り付けを入口にします。公式 Maps URL の `pano` や、共有リンクの `!1s` 形式などからパノラマ ID を読み取ります。短縮リンクの転送と内部的な URL 形式の解析は互換処理であり、Google の形式変更により使えなくなる可能性があります。
 
-Street View Tiles の最大 100 地点検索も、各地点に最も近いパノラマをまとめて検索する機能です。同じ地点の 100 時点を返す機能ではありません。JavaScript API にも、今回必要な履歴一覧の公開仕様は確認できませんでした。[Street View Tiles](https://developers.google.com/maps/documentation/tile/streetview)、[JavaScript Street View Service](https://developers.google.com/maps/documentation/javascript/reference/street-view-service?hl=en)
-
-アプリは Android の共有操作（`ACTION_SEND`）またはリンク貼り付けを入口にします。公式 Maps URL の `pano` と、共有リンクで使われることがある `!1s` 形式などから画像の ID を読み取ります。短縮リンクの転送や Google マップの内部的な URL 表現は、公開された履歴取得 API ではなく、形式変更の影響を受ける互換処理です。
-
-公式 Maps URL の例は次の形です。
+公式のパノラマ指定 URL は次の形です。
 
 ```text
 https://www.google.com/maps/@?api=1&map_action=pano&pano=PANORAMA_ID
 ```
 
-公式 URL には `viewpoint` による座標指定もありますが、画像 ID が見つからなければ座標付近の別画像に切り替わる場合があります。そのため、座標だけのリンクを「過去年を保持したリンク」とは扱いません。`pano` の値には `F:` で始まる形式などもあり、固定長の英数字と決めつけることもできません。[Maps URLs: Street View](https://developers.google.com/maps/documentation/urls/get-started#street-view-action)
+共有リンクが過去画像の ID を保持しない場合や、Google マップで見られる ID を Embed API が表示できない場合があります。座標だけの URL を、選んだ過去年を確実に保持したリンクとは扱いません。既知の `pano` を開く Embed リクエストには、ID 不明時に別画像へ切り替えるための `location` を付けません。[Maps URLs: Street View](https://developers.google.com/maps/documentation/urls/get-started#street-view-action)、[Embed の `pano` と `location`](https://developers.google.com/maps/documentation/embed/embedding-map#streetview_mode)
 
-共有時に選択した撮影時期がリンクに含まれない場合や、Google マップで見られても SDK では ID を読み込めない場合があります。全ての歴史画像の ID の可用性は保証できません。読み込み後は SDK が返した表示中の ID を基準に撮影時期を取得し、共有前に選んだ年や直前の画像の年を推測して表示しません。
+## 撮影時期
 
-## 撮影時期と平成の判定
+撮影時期には、任意設定の Street View Static API metadata を使用します。取得結果は年・年月・欠落のいずれかであり、架空の月日を補いません。「選んだ風景の撮影年月」として iframe の外側に表示し、著作権表示の年やカメラを使用した日付と区別します。[Street View Image Metadata](https://developers.google.com/maps/documentation/streetview/metadata)
 
-Street View Static API の metadata は、撮影時期について `YYYY-MM`、`YYYY`、値の欠落を認めています。画像の撮影時期と、著作権表示の年、アプリを使った日付は区別します。年月まで分かる場合に架空の日を付けることもありません。[Street View Image Metadata](https://developers.google.com/maps/documentation/streetview/metadata)
+表示例は「2008.09」「2008」で、未取得・不明の場合は `----.--` です。metadata が示すのは問い合わせた ID の時期であり、Google の iframe 内を読み取って得た情報ではありません。結果画面のナビゲーションを止めることで、別のパノラマへ移動した後も元の年月を表示し続けることを避けます。
 
-表示例は「2008.09」「2008」「撮影時期不明」です。平成の期間は 1989年1月8日から2019年4月30日です。例えば `2019-04` は平成ですが、`2019` だけでは平成と確定できません。「最古」は、比較する画像の集合が全て得られて初めて保証できるため、利用者が選んだ画像をアプリが自動的に最古と認定しません。
+平成は 1989年1月8日から2019年4月30日までです。例えば `2019-04` は平成ですが、`2019` だけでは確定できません。撮影年が古いことと、その地点で利用可能な画像の中で最古であることも区別します。
 
-## 位置と姿勢
-
-現在地は `LocationManager` の GPS / NETWORK プロバイダーから受け取ります。利用できるプロバイダー、測位の精度、更新頻度は端末の位置設定と権限に依存します。アプリが見えている間だけ位置更新を要求し、画像の選択地点と実際の現在地を区別します。[Android LocationManager](https://developer.android.com/reference/android/location/LocationManager)
-
-姿勢は回転ベクトルなどのセンサーから求めます。背面の光軸に当たる端末の `-Z` 方向を基準にし、真北に対する地磁気の偏角を補正します。Street View の `bearing` は真北から時計回り、`tilt` は上下方向で、SDK による表示更新が可能です。北を基準にしないゲーム用回転ベクトルだけでは、実景の方角と対応しません。[Android Position sensors](https://developer.android.com/develop/sensors-and-location/sensors/sensors_position)、[Android GeomagneticField](https://developer.android.com/reference/android/hardware/GeomagneticField)、[Street View の視点制御](https://developers.google.com/maps/documentation/android-sdk/streetview#set_the_camera_orientation_point_of_view)
-
-この設計で同期するのは主に上下・左右の表示方向です。Street View は撮影地点から見た球面画像なので、利用者の現在地から見た画像に視点を移動できるわけではありません。車道と歩道の位置差、撮影高さ、端末センサーの精度により、近くの物体の位置や建物の重なり方は実景とずれます。この視差は、GPS の改善や方位補正だけでは解消しません。
-
-## API キーと metadata 通信
-
-`local.properties` の設定は用途ごとに分けます。
+## API キーと通信
 
 | 設定 | 用途・制限 |
 | --- | --- |
-| `MAPS_API_KEY` | Maps SDK for Android。API 制限を同 SDK、アプリ制限を実際の Android パッケージ名と署名証明書にする。 |
-| `STREET_VIEW_METADATA_API_KEY` | Street View Static API の metadata。SDK 用とは別キーを用意し、API 制限と Android アプリ制限を設定する。 |
+| `MAPS_EMBED_API_KEY` | Maps Embed API。API 制限を同 API、アプリケーション制限をウェブサイトにする。 |
+| `STREET_VIEW_METADATA_API_KEY` | 任意。Street View Static API metadata 用の別キー。API 制限と Android アプリ制限を設定し、実エンドポイントで拒否動作を確認する。 |
 
-metadata を端末から直接問い合わせる場合、`X-Android-Package` に実際のパッケージ名、`X-Android-Cert` に署名証明書の SHA-1 を送ります。後者はコロンや接頭辞を含まない 40 桁の 16 進数です。Cloud Console の入力欄が要求するコロン区切り表記とは異なります。
+Maps Embed API は無料で、短期・長期のリクエスト制限はありません。利用には API キーが必要です。Google Cloud の設定は利用者が行い、他の API の有効化・利用分まで無料になるとは扱いません。metadata の問い合わせも公式に無償ですが、Embed とは別の API です。[Embed の料金](https://developers.google.com/maps/documentation/embed/usage-and-billing)、[API の設定手順](https://developers.google.com/maps/documentation/embed/get-api-key)、[metadata](https://developers.google.com/maps/documentation/streetview/metadata)
 
-Google は、古い REST エンドポイントでは Android アプリ制限が完全に対応していない場合があるとしています。したがって公開前に、正しい識別情報では利用でき、誤ったパッケージ名・証明書ではリクエストが拒否されることを、使用する metadata エンドポイントで確認する必要があります。このリポジトリではキー未提供のため未検証です。制限が機能しない場合、Google の推奨する認証付きプロキシを使用します。制限を解除したキーをアプリへ埋め込む運用には切り替えません。[Google Maps Platform security guidance](https://developers.google.com/maps/api-security-best-practices#secure-direct-mobile-web-service-calls)
+ローカルの HTML は `loadDataWithBaseURL` により `https://appassets.androidplatform.net/heisei-camera/viewer.html` をベース URL として読み込みます。Embed キーの HTTP リファラーには `https://appassets.androidplatform.net/*` を許可し、iframe からのリファラー送信を有効にします。これは Android パッケージ名や署名 SHA-1 による認証ではありません。[Android: ローカル HTML の読み込み](https://developer.android.com/develop/ui/views/layout/webapps/load-local-content#loaddatawithbaseurl)、[Embed: リファラー制限](https://developers.google.com/maps/documentation/embed/embedding-map#referrer-information-and-api-key-restrictions)
 
-Street View 表示と metadata 通信は別々に失敗し得ます。SDK の画像が表示できたことだけで、撮影時期取得や REST キーの制限が正しく機能しているとは判断しません。
+`appassets.androidplatform.net` は Android アプリのローカル Web コンテンツで使われる共通オリジンです。同じオリジンを用いる他のアプリと平成カメラを区別する強い制限にはなりません。現在のキー設定は開発時の設定案であり、実キーでの動作は未検証です。一般配布では、管理する専用 HTTPS オリジンから埋め込み HTML を配信する案も検討し、そのオリジンだけを許可した状態で動作を確認する必要があります。API 制限を Embed のみに限定し、無制限のキーにはしません。
 
-## ブックマークと再表示
+metadata 通信では `X-Android-Package` と `X-Android-Cert` に、実際のパッケージ名と署名証明書 SHA-1 を送ります。Google は古い REST エンドポイントで Android アプリ制限が十分に対応していない場合があると説明しています。正しい識別情報での成功と、誤った識別情報での拒否を確認してください。対応しない場合は認証付きサーバー経由の構成が必要です。[Google Maps Platform security guidance](https://developers.google.com/maps/api-security-best-practices#secure-direct-mobile-web-service-calls)
 
-シャッター形のボタンが保存するのは、パノラマ ID と視点です。画像、スクリーンショット、タイルは保存しません。Google はパノラマ ID が変更・削除される可能性を説明しているため、ブックマークを永久に再表示できるとは保証しません。再表示できない過去画像を、同じ座標の新しい画像に黙って置き換えないことを設計上の原則とします。[Street View Image Metadata](https://developers.google.com/maps/documentation/streetview/metadata)
+## 受け入れ確認
 
-## 未検証の受け入れ条件
+カメラ権限、ライブプレビュー、シャッターによる画面遷移、結果画面でのカメラ停止、戻る操作によるプレビュー再開を確認します。実キーを使う検証では、選んだ過去画像と Embed の一致、初期表示と Google 帰属表示、しおり再表示、日付とキー制限を別途確認します。
 
-実際の API キーと Google Play 開発者サービスが利用可能な Android 端末で、次を確認する必要があります。
-
-1. 現在地の取得と、その付近の Street View の表示。
-2. Google マップで選んだ過去年が共有リンクに残り、SDK で同じ画像を表示できること。
-3. 表示中の画像と metadata の撮影時期の一致。欠落時に直前の年月を表示しないこと。
-4. 端末をかざした状態での東西南北と上下方向の一致。
-5. GPS 更新で選択した過去画像が置き換わらず、現在地操作で明示的に切り替わること。
-6. ブックマークの保存・再表示と、取得できない ID の扱い。
-7. metadata REST キーのアプリ制限が、不正な識別情報のリクエストを拒否すること。
-
-Google Cloud のアカウント設定、課金の有効化、API キーの発行はこの作業では行っていません。ローカルのビルド・テスト結果は、これらの外部サービスや実機の受け入れ確認を代替しません。
+キー未設定・検証用 ID の画面テスト、HTML の読み込み完了、ビルドの成功は、Google の実画像の表示成功を意味しません。具体的な確認状況は [検証記録](VALIDATION.md) を参照してください。

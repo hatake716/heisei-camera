@@ -20,10 +20,10 @@ android {
         applicationId = "io.github.hatake716.heiseicamera"
         minSdk = 29
         targetSdk = 36
-        versionCode = 1
-        versionName = "0.1.0"
-        manifestPlaceholders["MAPS_API_KEY"] = secret("MAPS_API_KEY")
-        buildConfigField("boolean", "HAS_MAPS_KEY", secret("MAPS_API_KEY").isNotBlank().toString())
+        versionCode = 2
+        versionName = "0.2.0"
+        buildConfigField("String", "EMBED_API_KEY", quoted(secret("MAPS_EMBED_API_KEY")))
+        buildConfigField("boolean", "HAS_EMBED_KEY", secret("MAPS_EMBED_API_KEY").isNotBlank().toString())
         buildConfigField("String", "METADATA_API_KEY", quoted(secret("STREET_VIEW_METADATA_API_KEY")))
     }
     buildTypes {
@@ -50,7 +50,10 @@ dependencies {
     implementation("androidx.compose.foundation:foundation")
     implementation("androidx.compose.material3:material3")
     implementation("androidx.compose.material:material-icons-extended:1.7.8")
-    implementation("com.google.android.gms:play-services-maps:19.2.0")
+    implementation("androidx.camera:camera-core:1.5.3")
+    implementation("androidx.camera:camera-camera2:1.5.3")
+    implementation("androidx.camera:camera-lifecycle:1.5.3")
+    implementation("androidx.camera:camera-view:1.5.3")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2")
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.json:json:20240303")

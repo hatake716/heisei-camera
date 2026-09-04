@@ -1,268 +1,175 @@
 package io.github.hatake716.heiseicamera
 
 import android.content.Context
-import android.location.Location
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
-import com.google.android.gms.maps.StreetViewPanorama
-import com.google.android.gms.maps.model.LatLng
-import com.google.android.gms.maps.model.StreetViewPanoramaCamera
-import com.google.android.gms.maps.model.StreetViewPanoramaLocation
-import com.google.android.gms.maps.model.StreetViewSource
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import org.json.JSONArray
 import org.json.JSONObject
 
-data class Bookmark(val panoId: String, val bearing: Float, val tilt: Float, val createdAt: Long)
+/** A saved selection, never a claim about the embedded viewer's current image or camera pose. */
+data class Bookmark(val panoId: String, val createdAt: Long)
 
-/** The selected historical panorama stays pinned when the device moves. */
 class CameraSession(private val context: Context, private val scope: CoroutineScope) {
-    var fix by mutableStateOf<GeoFix?>(null)
-        private set
-    var direction by mutableStateOf<ViewDirection?>(null)
-        private set
-    var locationStatus by mutableStateOf("現在地はまだ取得していません")
-    var tracking by mutableStateOf(true)
-    var selectedPano by mutableStateOf<String?>(null)
-        private set
-    var currentMode by mutableStateOf(false)
-        private set
-    var activePano by mutableStateOf<String?>(null)
-        private set
+    private val prefs = context.getSharedPreferences("panorama_bookmarks", Context.MODE_PRIVATE)
+    private var viewer by mutableStateOf(CameraViewerState(selectedPano = readLastSelection()))
+    val selectedPano: String? get() = viewer.selectedPano
+    val viewEpoch: Int get() = viewer.epoch
+    val pageState: EmbedPageState get() = viewer.pageState
+
     var date by mutableStateOf<CaptureDate?>(null)
         private set
-    var dateStatus by mutableStateOf("風景を選ぶと撮影年月を表示します")
+    var dateStatus by mutableStateOf("風景を選ぶと撮影年月を確認できます")
         private set
     var message by mutableStateOf<String?>(null)
-    var loading by mutableStateOf(false)
+    var importing by mutableStateOf(false)
         private set
-    var panoramaPosition by mutableStateOf<LatLng?>(null)
+    /** Saved only with Activity state so interrupted short-link resolution can be resumed. */
+    var pendingImportLink by mutableStateOf<String?>(null)
         private set
     var bookmarks by mutableStateOf(readBookmarks())
         private set
-    var pendingLink by mutableStateOf<String?>(null)
-        private set
-    var importing by mutableStateOf(false)
-        private set
-    private var panorama: StreetViewPanorama? = null
-    private var metadataJob: Job? = null
-    private var timeoutJob: Job? = null
+
+    private var importVersion = 0L
+    private var metadataVersion = 0L
     private var importJob: Job? = null
-    private var selectionVersion = 0L
-    private var lastPosition: GeoFix? = null
-    private var requestedBearing: Float? = null
-    private var requestedTilt: Float? = null
+    private var metadataJob: Job? = null
     private val metadata = PanoramaMetadataClient(context, BuildConfig.METADATA_API_KEY)
-    private val prefs = context.getSharedPreferences("panorama_bookmarks", Context.MODE_PRIVATE)
-
-    fun attach(value: StreetViewPanorama) {
-        panorama = value
-        value.isUserNavigationEnabled = false
-        value.isStreetNamesEnabled = false
-        value.isPanningGesturesEnabled = !tracking
-        value.setOnStreetViewPanoramaChangeListener { onPanoramaChanged(it) }
-        if (selectedPano != null) requestSelected() else if (currentMode) requestCurrent(force = true)
-    }
-
-    fun detach() {
-        panorama?.setOnStreetViewPanoramaChangeListener(null)
-        panorama = null
-        clearImage()
-    }
-
-    fun pauseInputs() {
-        fix = null
-        direction = null
-    }
-
-    fun freshFix(): GeoFix? = fix?.takeIf { System.currentTimeMillis() - it.timeMillis in -2_000..30_000 }
 
     private fun cancelImport() {
-        selectionVersion++
+        importVersion++
         importJob?.cancel()
         importJob = null
         importing = false
+        pendingImportLink = null
     }
 
-    fun onLocation(value: GeoFix) {
-        fix = value
-        if (currentMode) requestCurrent()
-    }
-
-    fun onDirection(value: ViewDirection) {
-        direction = value
-        if (tracking && activePano != null) applyDirection(value)
-    }
-
-    fun toggleTracking() {
-        tracking = !tracking
-        panorama?.isPanningGesturesEnabled = !tracking
-        if (tracking) direction?.let(::applyDirection)
-    }
-
-    private fun applyDirection(value: ViewDirection) {
-        val view = panorama ?: return
-        view.animateTo(StreetViewPanoramaCamera.Builder()
-            .bearing(value.bearing).tilt(value.tilt.coerceIn(-90f, 90f))
-            .zoom(view.panoramaCamera.zoom).build(), 0)
-    }
-
-    fun chooseCurrent() {
-        cancelImport()
-        selectedPano = null
-        currentMode = true
-        pendingLink = null
-        requestedBearing = null
-        requestedTilt = null
-        clearImage()
-        message = if (fix == null) "現在地を取得しています" else null
-        requestCurrent(force = true)
+    private fun clearMetadata() {
+        metadataVersion++
+        metadataJob?.cancel()
+        metadataJob = null
+        date = null
+        dateStatus = if (BuildConfig.METADATA_API_KEY.isBlank()) {
+            "撮影年月は Google の表示で確認してください"
+        } else {
+            "選択した画像の撮影年月を確認します"
+        }
     }
 
     fun importLink(text: String) {
         cancelImport()
-        val version = selectionVersion
+        val version = importVersion
+        importing = true
+        pendingImportLink = text
+        message = "共有リンクを確認しています"
         importJob = scope.launch {
-            importing = true
-            message = "共有リンクを確認しています"
+            var completed = false
             try {
                 val reference = PanoramaLinks.resolve(text)
-                if (version != selectionVersion) return@launch
+                completed = true
+                if (version != importVersion) return@launch
                 if (reference == null) {
                     message = "パノラマを特定できませんでした。Google マップのストリートビューを開き、もう一度共有してください。"
                 } else {
-                    pendingLink = text
+                    // open() invalidates earlier imports without cancelling this successful job.
                     importJob = null
                     open(reference.panoId)
                 }
-            } catch (error: kotlinx.coroutines.CancellationException) {
-                throw error
+            } catch (cancelled: CancellationException) {
+                throw cancelled
             } catch (_: Exception) {
-                if (version == selectionVersion) message = "リンクを読み込めませんでした。通信を確認して再度お試しください。"
+                completed = true
+                if (version == importVersion) {
+                    message = "リンクを読み込めませんでした。通信を確認して再度お試しください。"
+                }
             } finally {
-                if (version == selectionVersion) importing = false
+                if (version == importVersion) {
+                    importing = false
+                    // Coroutine cancellation during Activity teardown must retain this for Saver.
+                    if (completed) pendingImportLink = null
+                }
             }
         }
     }
 
-    fun open(panoId: String, bearing: Float? = null, tilt: Float? = null) {
+    fun open(panoId: String) {
         cancelImport()
-        currentMode = false
-        selectedPano = panoId
-        requestedBearing = bearing
-        requestedTilt = tilt
-        if (bearing != null) {
-            tracking = false
-            panorama?.isPanningGesturesEnabled = true
-        }
-        clearImage()
-        if (!BuildConfig.HAS_MAPS_KEY) {
-            message = "リンクを受け取りました。アプリ内表示には Maps API キーを設定したビルドが必要です。"
-        } else requestSelected()
-    }
-
-    private fun clearImage() {
-        metadataJob?.cancel()
-        timeoutJob?.cancel()
-        activePano = null
-        date = null
-        panoramaPosition = null
-        dateStatus = "撮影年月を確認中"
-        loading = false
-    }
-
-    private fun startLoading() {
-        clearImage()
-        loading = true
-        message = null
-        timeoutJob = scope.launch {
-            delay(20_000)
-            loading = false
-            dateStatus = "撮影年月を確認できません"
-            message = "風景を読み込めませんでした。接続や API キーを確認するか、Google マップで開いてください。"
-        }
-    }
-
-    private fun requestSelected() {
-        val view = panorama ?: return
-        val id = selectedPano ?: return
-        startLoading()
-        if (view.location?.panoId == id) onPanoramaChanged(view.location)
-        else view.setPosition(id)
-    }
-
-    private fun requestCurrent(force: Boolean = false) {
-        val view = panorama ?: return
-        val position = freshFix() ?: return
-        if (loading && !force) return
-        val previous = lastPosition
-        if (!force && previous != null && (position.timeMillis - previous.timeMillis < 5_000 ||
-                    distance(previous.latitude, previous.longitude, position.latitude, position.longitude) < 20)) return
-        lastPosition = position
-        startLoading()
-        view.setPosition(LatLng(position.latitude, position.longitude), 75, StreetViewSource.OUTDOOR)
-    }
-
-    private fun onPanoramaChanged(value: StreetViewPanoramaLocation?) {
-        // A native SDK callback has no request token. Ignore late responses before
-        // touching the active request's timers or its date metadata.
-        if (!currentMode && selectedPano == null) return
-        // Null callbacks cannot be attributed to a request; only the request timeout
-        // reports failure, including when an old null arrives after a newer success.
-        if (value == null) return
-        if (selectedPano != null && value.panoId != selectedPano) return
-        if (currentMode) {
-            val requested = lastPosition ?: return
-            if (distance(requested.latitude, requested.longitude, value.position.latitude, value.position.longitude) > 100f) return
-        }
-        timeoutJob?.cancel()
-        metadataJob?.cancel()
-        date = null
-        loading = false
-        activePano = value.panoId
-        panoramaPosition = value.position
-        message = null
-        val bearing = requestedBearing
-        val tilt = requestedTilt
-        if (bearing != null && tilt != null) {
-            panorama?.animateTo(StreetViewPanoramaCamera.Builder().bearing(bearing).tilt(tilt).zoom(0f).build(), 0)
-            requestedBearing = null
-            requestedTilt = null
-        } else if (tracking) direction?.let(::applyDirection)
-        if (BuildConfig.METADATA_API_KEY.isBlank()) {
-            dateStatus = "撮影年月不明 · 年月情報の接続が未設定"
+        if (!PanoramaLinks.validPanoId(panoId)) {
+            message = "このリンクのパノラマを開けません。Google マップからもう一度共有してください。"
             return
         }
-        dateStatus = "撮影年月を確認中"
-        val displayedId = value.panoId
-        metadataJob = scope.launch {
-            when (val result = metadata.fetch(displayedId)) {
-                is MetadataResult.Success -> if (activePano == displayedId) {
-                    date = result.date
-                    dateStatus = result.date?.eraLabel ?: "撮影年月不明"
-                }
-                is MetadataResult.Failure -> if (activePano == displayedId) {
-                    dateStatus = "撮影年月不明"
-                    message = result.message
-                }
-            }
-        }
+        viewer = viewer.select(panoId)
+        prefs.edit().putString("selected_pano", panoId).apply()
+        clearMetadata()
+        message = "過去の風景を選びました。"
     }
 
     fun retry() {
-        if (selectedPano != null) requestSelected() else if (currentMode) requestCurrent(force = true)
+        selectedPano?.let(::open)
+    }
+
+    fun markPageState(panoId: String, epoch: Int, state: EmbedPageState) {
+        if (!viewer.matches(panoId, epoch)) return
+        viewer = viewer.pageChanged(panoId, epoch, state)
+        if (state == EmbedPageState.PAGE_LOADED) {
+            if (date == null && metadataJob == null) requestSelectedMetadata(panoId, epoch)
+        } else {
+            clearMetadata()
+        }
+    }
+
+    /** Opens a read-only live WebView result; no bitmap or image file is created. */
+    fun shutter(): Boolean {
+        if (importing) return false
+        val id = selectedPano ?: return false
+        // Each camera-to-past transition creates a fresh iframe, including the same selection.
+        viewer = viewer.select(id)
+        clearMetadata()
+        message = null
+        return true
+    }
+
+    fun resume() {
+        viewer = selectedPano?.let(viewer::select) ?: viewer
+        clearMetadata()
+        message = null
+    }
+
+    private fun requestSelectedMetadata(panoId: String, epoch: Int) {
+        if (BuildConfig.METADATA_API_KEY.isBlank() || !viewer.canLabelSelection(panoId, epoch)) return
+        val version = ++metadataVersion
+        dateStatus = "選択した画像の撮影年月を確認中"
+        metadataJob = scope.launch {
+            try {
+                val result = metadata.fetch(panoId)
+                if (version != metadataVersion || !viewer.canLabelSelection(panoId, epoch)) return@launch
+                when (result) {
+                    is MetadataResult.Success -> {
+                        date = result.date
+                        dateStatus = result.date?.let { "選択した画像：${it.eraLabel}" }
+                            ?: "選択した画像の撮影年月は不明です"
+                    }
+                    is MetadataResult.Failure -> {
+                        date = null
+                        dateStatus = "撮影年月は Google の表示で確認してください"
+                    }
+                }
+            } finally {
+                if (version == metadataVersion) metadataJob = null
+            }
+        }
     }
 
     fun saveBookmark(): Boolean {
-        val id = activePano ?: return false
-        val camera = panorama?.panoramaCamera ?: return false
-        val entry = Bookmark(id, camera.bearing, camera.tilt, System.currentTimeMillis())
+        val id = selectedPano ?: return false
+        val entry = Bookmark(id, System.currentTimeMillis())
         bookmarks = (listOf(entry) + bookmarks.filterNot { it.panoId == id }).take(100)
         persistBookmarks()
+        message = "選んだ風景をしおりに残しました。"
         return true
     }
 
@@ -273,8 +180,7 @@ class CameraSession(private val context: Context, private val scope: CoroutineSc
 
     private fun persistBookmarks() {
         val array = JSONArray()
-        bookmarks.forEach { array.put(JSONObject().put("id", it.panoId).put("bearing", it.bearing)
-            .put("tilt", it.tilt).put("createdAt", it.createdAt)) }
+        bookmarks.forEach { array.put(JSONObject().put("id", it.panoId).put("createdAt", it.createdAt)) }
         prefs.edit().putString("entries", array.toString()).apply()
     }
 
@@ -284,24 +190,13 @@ class CameraSession(private val context: Context, private val scope: CoroutineSc
         (0 until minOf(entries.length(), 100)).mapNotNull { index ->
             runCatching {
                 val item = entries.getJSONObject(index)
-                Bookmark(item.getString("id"), item.getDouble("bearing").toFloat(),
-                    item.getDouble("tilt").toFloat(), item.getLong("createdAt"))
-            }.getOrNull()?.takeIf { PanoramaLinks.validPanoId(it.panoId) && it.bearing.isFinite() &&
-                it.tilt.isFinite() && it.tilt in -90f..90f && it.createdAt > 0 }
+                // Existing bookmarks keep their original ID/date. The old SDK pose is ignored.
+                Bookmark(item.getString("id"), item.getLong("createdAt"))
+            }.getOrNull()?.takeIf { PanoramaLinks.validPanoId(it.panoId) && it.createdAt > 0 }
         }.distinctBy { it.panoId }
     }.getOrDefault(emptyList())
 
-    fun distanceToPanorama(): Int? {
-        val a = freshFix() ?: return null
-        val b = panoramaPosition ?: return null
-        return distance(a.latitude, a.longitude, b.latitude, b.longitude).toInt()
-    }
-
-    companion object {
-        private fun distance(lat1: Double, lon1: Double, lat2: Double, lon2: Double): Float {
-            val result = FloatArray(1)
-            Location.distanceBetween(lat1, lon1, lat2, lon2, result)
-            return result[0]
-        }
-    }
+    private fun readLastSelection(): String? = runCatching {
+        prefs.getString("selected_pano", null)?.takeIf(PanoramaLinks::validPanoId)
+    }.getOrNull()
 }
