@@ -24,6 +24,8 @@ Street View の表示を Maps SDK for Android から Maps Embed API へ変更し
 
 Maps Embed API の利用料は無料で、リクエスト数の制限もありませんが、API キーが必要です。設定方法は下の「ローカル設定」を参照してください。キー未設定の場合は過去画像の代わりに設定案内を表示します。確認済み・未確認の範囲は [検証記録](docs/VALIDATION.md) を参照してください。[Google の料金・利用条件](https://developers.google.com/maps/documentation/embed/usage-and-billing)
 
+Google 公式サンプルの地点から得たパノラマを使い、実キーによる認証と、シャッター後の Street View の表示を Android エミュレーターの縦・横画面で確認しました。WebView の高さが0になって風景が表示されない問題も修正済みです。利用者が選ぶ過去画像の表示と、Google マップで選んだ撮影時期の保持は別途確認が必要です。
+
 ## 表示とプライバシー
 
 アプリ独自の撮影年月表示は行いません。埋め込み画面に Google が表示する撮影時期や帰属表示は、そのまま表示します。
@@ -53,7 +55,7 @@ MAPS_EMBED_API_KEY=YOUR_EMBED_API_KEY
 
 Google Cloud で Maps Embed API を有効にし、`MAPS_EMBED_API_KEY` の API 制限を **Maps Embed API**、アプリケーション制限を **ウェブサイト** に設定します。現在のローカル HTML のオリジンに合わせ、許可する HTTP リファラーは `https://appassets.androidplatform.net/*` とします。必要な API キーはこの1つです。Embed 用キーに Android パッケージ名・署名 SHA-1 の制限を設定する構成ではありません。[Embed API の設定](https://developers.google.com/maps/documentation/embed/get-api-key)、[リファラーの仕様](https://developers.google.com/maps/documentation/embed/embedding-map#referrer-information-and-api-key-restrictions)
 
-`appassets.androidplatform.net` は Android のローカル Web コンテンツで使われる共通オリジンです。このリファラーだけでは平成カメラ固有のアプリ識別になりません。実キーでの表示とリファラー制限は未検証です。一般配布前には専用の管理ドメインで HTML を配信する構成を含めて検討し、意図した制限が機能することを確認してください。キーの API 制限は Embed のみに維持します。[Android のローカル Web コンテンツ](https://developer.android.com/develop/ui/views/layout/webapps/load-local-content)
+`appassets.androidplatform.net` は Android のローカル Web コンテンツで使われる共通オリジンです。このリファラーだけでは平成カメラ固有のアプリ識別になりません。実キーを使い、このオリジンからの認証が通ることは確認しました。Google Cloud 上の実際の制限設定と、許可外オリジンからの拒否動作は未確認です。一般配布前には専用の管理ドメインで HTML を配信する構成を含めて検討し、意図した制限が機能することを確認してください。キーの API 制限は Embed のみに維持します。[Android のローカル Web コンテンツ](https://developer.android.com/develop/ui/views/layout/webapps/load-local-content)
 
 ## ビルドと検証
 

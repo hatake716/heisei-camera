@@ -62,6 +62,12 @@ private fun EmbedViewerContent(
         ViewerHolder(context).apply {
             val owner = this
             webView.apply {
+                // Chromium uses these params to size the HTML viewport. WRAP_CONTENT
+                // can collapse 100%-height content even when Compose fills the view.
+                layoutParams = ViewGroup.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                )
                 setBackgroundColor(0xff101815.toInt())
                 settings.apply {
                     javaScriptEnabled = true // Required by the official interactive iframe.
