@@ -1,0 +1,5 @@
+sdk.dir=/path/to/Android/Sdk
+# Maps SDK for Android: Android package + SHA-1 restriction
+MAPS_API_KEY=
+# Street View Static API: separate restricted key, see docs/FEASIBILITY.md
+STREET_VIEW_METADATA_API_KEY=
