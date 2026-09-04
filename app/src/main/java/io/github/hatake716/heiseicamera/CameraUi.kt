@@ -67,14 +67,31 @@ fun HeiseiCameraApp(incomingLink: String?, consumeLink: () -> Unit) {
     val lifecycle = LocalLifecycleOwner.current.lifecycle
     val scope = rememberCoroutineScope()
     val session = rememberSaveable(saver = Saver<CameraSession, Bundle>(
-        save = { Bundle().apply { putString("pano", it.selectedPano); putString("pendingImport", it.pendingImportLink) } },
+        save = { Bundle().apply {
+            putString("pano", it.selectedPano)
+            putBoolean("automatic", it.isAutomatic)
+            putString("pendingImport", it.pendingImportLink)
+            when (val target = it.target) {
+                is StreetViewTarget.Nearby -> {
+                    putDouble("latitude", target.location.latitude)
+                    putDouble("longitude", target.location.longitude)
+                }
+                is StreetViewTarget.Panorama -> putString("targetPano", target.panoId)
+                null -> Unit
+            }
+        } },
         restore = { state -> CameraSession(context, scope).apply {
             state.getString("pano")?.let(::open)
+            if (state.getBoolean("automatic", true)) selectAutomatic()
+            if (state.containsKey("latitude") && state.containsKey("longitude")) {
+                runCatching { SceneLocation(state.getDouble("latitude"), state.getDouble("longitude")) }
+                    .getOrNull()?.let { restoreTarget(StreetViewTarget.Nearby(it)) }
+            } else state.getString("targetPano")?.let { restoreTarget(StreetViewTarget.Panorama(it)) }
             message = null
             state.getString("pendingImport")?.let(::importLink)
         } },
     )) { CameraSession(context, scope) }
-    var showPast by rememberSaveable { mutableStateOf(false) }
+    var showStreetView by rememberSaveable { mutableStateOf(false) }
     var dialog by rememberSaveable { mutableStateOf<String?>(null) }
     var linkText by rememberSaveable { mutableStateOf("") }
     val cameraPreferences = remember { context.getSharedPreferences("camera_preferences", Context.MODE_PRIVATE) }
@@ -84,31 +101,82 @@ fun HeiseiCameraApp(incomingLink: String?, consumeLink: () -> Unit) {
     var cameraEpoch by remember { mutableIntStateOf(0) }
     val snackbar = remember { SnackbarHostState() }
     val haptic = LocalHapticFeedback.current
+    var pendingLocation by remember { mutableStateOf(false) }
+    var locationRequestEpoch by remember { mutableIntStateOf(0) }
+    var locationProblem by rememberSaveable { mutableStateOf<String?>(null) }
+    var resumed by remember { mutableStateOf(lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) }
     val permission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {
         cameraGranted = it
+    }
+    val locationPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { grants ->
+        if (grants.values.any { it } || hasLocationPermission(context)) {
+            locationRequestEpoch++
+            pendingLocation = session.isAutomatic
+        } else {
+            locationProblem = "現在地付近の風景を表示するには、位置情報の許可が必要です。"
+            dialog = "location"
+        }
     }
     fun requestCamera() {
         permissionRequested = true
         cameraPreferences.edit().putBoolean("permission_prompted", true).apply()
         permission.launch(Manifest.permission.CAMERA)
     }
+    fun requestLocation() {
+        locationProblem = null
+        locationRequestEpoch++
+        if (hasLocationPermission(context)) pendingLocation = true
+        else locationPermission.launch(arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION))
+    }
     fun openMaps() = openExternal(context,
-        session.selectedPano?.let { mapsUrl(panoId = it) } ?: "https://www.google.com/maps/",
+        session.target?.let(::mapsUrl) ?: session.selectedPano?.takeIf { !session.isAutomatic }
+            ?.let { mapsUrl(StreetViewTarget.Panorama(it)) } ?: "https://www.google.com/maps/",
     ) { session.message = it }
     fun returnToCamera() {
-        if (showPast) cameraState = CameraPreviewState.STARTING
-        showPast = false
+        pendingLocation = false
+        if (showStreetView) cameraState = CameraPreviewState.STARTING
+        showStreetView = false
         session.resume()
     }
     fun shutter() {
-        if (session.selectedPano == null) {
-            dialog = "import"
-        } else if (session.shutter()) {
+        if (session.isAutomatic) requestLocation()
+        else if (session.selectedPano == null) dialog = "import"
+        else if (session.shutter()) {
             haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-            showPast = true
+            showStreetView = true
         }
     }
-    BackHandler(enabled = showPast && dialog == null) { returnToCamera() }
+    LaunchedEffect(pendingLocation, resumed, session.isAutomatic, locationRequestEpoch) {
+        if (!pendingLocation || !resumed || !session.isAutomatic) return@LaunchedEffect
+        val expectedEpoch = locationRequestEpoch
+        val result = currentLocation(context)
+        // Cancellation also needs an immediate guard before Compose disposes this effect.
+        if (!pendingLocation || !resumed || !session.isAutomatic || expectedEpoch != locationRequestEpoch) return@LaunchedEffect
+        when (result) {
+            is CurrentLocationResult.Success -> {
+                if (session.shutter(result.location)) {
+                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                    showStreetView = true
+                    if (result.accuracyMeters > 100f) session.message = "位置の精度が低いため、離れた風景が表示される場合があります。"
+                }
+            }
+            CurrentLocationResult.PermissionDenied -> {
+                locationProblem = "位置情報の許可が必要です。端末の設定で許可してください。"
+                dialog = "location"
+            }
+            CurrentLocationResult.Disabled -> {
+                locationProblem = "端末の位置情報がオフになっています。位置情報をオンにしてから、もう一度お試しください。"
+                dialog = "location"
+            }
+            CurrentLocationResult.Unavailable -> {
+                locationProblem = "現在地を取得できませんでした。空が見える場所へ移動するか、通信を確認してもう一度お試しください。"
+                dialog = "location"
+            }
+        }
+        pendingLocation = false
+    }
+    BackHandler(enabled = showStreetView && dialog == null) { returnToCamera() }
+    BackHandler(enabled = pendingLocation && dialog == null) { pendingLocation = false }
     LaunchedEffect(Unit) {
         if (!cameraGranted && !permissionRequested) requestCamera()
     }
@@ -128,7 +196,17 @@ fun HeiseiCameraApp(incomingLink: String?, consumeLink: () -> Unit) {
     }
     DisposableEffect(lifecycle) {
         val observer = LifecycleEventObserver { _, event ->
-            if (event == Lifecycle.Event.ON_RESUME) cameraGranted = hasCameraPermission(context)
+            when (event) {
+                Lifecycle.Event.ON_RESUME -> {
+                    cameraGranted = hasCameraPermission(context)
+                    resumed = true
+                }
+                Lifecycle.Event.ON_PAUSE -> {
+                    resumed = false
+                    pendingLocation = false
+                }
+                else -> Unit
+            }
         }
         lifecycle.addObserver(observer)
         onDispose { lifecycle.removeObserver(observer) }
@@ -148,37 +226,62 @@ fun HeiseiCameraApp(incomingLink: String?, consumeLink: () -> Unit) {
                         }
                         Column(Modifier.weight(1f).padding(start = 10.dp)) {
                             Text("平成カメラ", fontSize = 20.sp, fontWeight = FontWeight.SemiBold, letterSpacing = .2.sp)
-                            if (!landscape) Text("いまから、あの頃へ。", color = Muted, fontSize = 10.sp, letterSpacing = .2.sp)
+                            if (!landscape) Text("この街の、もうひとつの景色。", color = Muted, fontSize = 10.sp, letterSpacing = .2.sp)
                         }
-                        IconButton(onClick = { dialog = "about" }) { Icon(Icons.Outlined.Info, "使い方と接続情報", tint = Muted) }
+                        IconButton(onClick = { pendingLocation = false; dialog = "about" }) { Icon(Icons.Outlined.Info, "使い方と接続情報", tint = Muted) }
                     }
                     if (landscape) {
                         Row(Modifier.weight(1f).padding(bottom = 8.dp), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                            Finder(session, showPast, cameraGranted, cameraState, cameraEpoch, { cameraState = it },
+                            Finder(session, showStreetView, cameraGranted, cameraState, cameraEpoch, { cameraState = it },
                                 ::requestCamera, { cameraEpoch++ }, ::openMaps,
                                 Modifier.weight(1f).fillMaxHeight())
-                            CameraControls(session, showPast, cameraGranted && cameraState == CameraPreviewState.STREAMING,
-                                ::shutter, ::returnToCamera, { dialog = "import" }, { dialog = "bookmarks" }, compact = true,
+                            CameraControls(session, showStreetView, cameraGranted && cameraState == CameraPreviewState.STREAMING,
+                                ::shutter, ::returnToCamera, { pendingLocation = false; dialog = "source" }, { pendingLocation = false; dialog = "bookmarks" }, ::openMaps, pendingLocation, compact = true,
                                 modifier = Modifier.width(180.dp).fillMaxHeight())
                         }
                     } else {
                         Row(Modifier.fillMaxWidth().padding(bottom = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-                            StatusPill(if (showPast) "あの頃 / PAST" else "いま / LIVE", if (showPast) Accent else Cream)
+                            StatusPill(if (showStreetView) "STREET VIEW" else "いま / LIVE", if (showStreetView) Accent else Cream)
                             Spacer(Modifier.weight(1f))
-                            Text(if (showPast) "選んだ風景" else "カメラをかざして", color = Muted, fontSize = 12.sp)
+                            Text(if (showStreetView && session.isAutomatic) "現在地付近" else if (showStreetView) "選んだ風景" else "カメラをかざして", color = Muted, fontSize = 12.sp)
                         }
-                        Finder(session, showPast, cameraGranted, cameraState, cameraEpoch, { cameraState = it },
+                        Finder(session, showStreetView, cameraGranted, cameraState, cameraEpoch, { cameraState = it },
                             ::requestCamera, { cameraEpoch++ }, ::openMaps,
                             Modifier.weight(1f).fillMaxWidth())
-                        CameraControls(session, showPast, cameraGranted && cameraState == CameraPreviewState.STREAMING,
-                            ::shutter, ::returnToCamera, { dialog = "import" }, { dialog = "bookmarks" }, compact = false)
+                        CameraControls(session, showStreetView, cameraGranted && cameraState == CameraPreviewState.STREAMING,
+                            ::shutter, ::returnToCamera, { pendingLocation = false; dialog = "source" }, { pendingLocation = false; dialog = "bookmarks" }, ::openMaps, pendingLocation, compact = false)
                     }
                 }
             }
         }
 
+        if (dialog == "source") ModalBottomSheet(onDismissRequest = { dialog = null }, containerColor = Panel) {
+            Column(Modifier.fillMaxWidth().padding(horizontal = 24.dp).padding(bottom = 32.dp)) {
+                Text("映す風景", fontSize = 23.sp, fontWeight = FontWeight.Bold)
+                Text("通常は現在地から自動で表示します。撮影時期や最古の画像は指定できません。", color = Muted, modifier = Modifier.padding(vertical = 16.dp))
+                Button(onClick = { returnToCamera(); session.selectAutomatic(); dialog = null }, modifier = Modifier.fillMaxWidth()) {
+                    Text("現在地から自動表示")
+                }
+                TextButton(onClick = { dialog = "import" }, modifier = Modifier.fillMaxWidth()) { Text("共有リンクから風景を選ぶ") }
+                TextButton(onClick = { dialog = "bookmarks" }, modifier = Modifier.fillMaxWidth()) { Text("しおりから選ぶ") }
+            }
+        }
+
+        if (dialog == "location") AlertDialog(onDismissRequest = { dialog = null },
+            title = { Text("現在地を確認してください") },
+            text = { Column {
+                Text(locationProblem.orEmpty())
+                TextButton(onClick = {
+                    try { context.startActivity(Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS)) }
+                    catch (_: android.content.ActivityNotFoundException) { session.message = "端末の設定から位置情報をオンにしてください。" }
+                }) { Text("位置情報の設定を開く") }
+                TextButton(onClick = { openExternal(context, "package:${context.packageName}", appSettings = true) { session.message = it } }) { Text("アプリの権限を開く") }
+            } },
+            confirmButton = { TextButton(onClick = { dialog = null; requestLocation() }) { Text("もう一度取得する") } },
+            dismissButton = { TextButton(onClick = { dialog = null }) { Text("閉じる") } })
+
         if (dialog == "import") AlertDialog(onDismissRequest = { dialog = null },
-            title = { Text("シャッターで映す過去を選ぶ") },
+            title = { Text("共有リンクから風景を選ぶ") },
             text = {
                 Column(Modifier.verticalScroll(rememberScrollState())) {
                     Text("Google マップで「他の日付を見る」から風景を選び、共有リンクを貼り付けてください。", color = Muted)
@@ -186,7 +289,7 @@ fun HeiseiCameraApp(incomingLink: String?, consumeLink: () -> Unit) {
                     OutlinedTextField(value = linkText, onValueChange = { linkText = it.take(8192) },
                         label = { Text("Google マップの共有リンク") }, modifier = Modifier.fillMaxWidth(),
                         minLines = 2, maxLines = 4, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri))
-                    Text("カメラで見ている場所とは自動で連動しません。共有リンクが過去の年月を保持しない場合があります。", color = Muted, fontSize = 12.sp, modifier = Modifier.padding(top = 12.dp))
+                    Text("このモードでは選んだ画像を表示します。現在地とは連動しません。過去画像の共有リンクは、選んだ時期を保持しない場合があります。", color = Muted, fontSize = 12.sp, modifier = Modifier.padding(top = 12.dp))
                 }
             }, confirmButton = { TextButton(enabled = linkText.isNotBlank() && !session.importing, onClick = {
                 returnToCamera(); session.importLink(linkText); dialog = null
@@ -194,18 +297,18 @@ fun HeiseiCameraApp(incomingLink: String?, consumeLink: () -> Unit) {
 
         if (dialog == "about") ModalBottomSheet(onDismissRequest = { dialog = null }, containerColor = Panel) {
             Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(horizontal = 24.dp).padding(bottom = 32.dp)) {
-                Text("シャッターで、あの頃へ。", fontSize = 23.sp, fontWeight = FontWeight.Bold)
+                Text("シャッターで、この街を見る。", fontSize = 23.sp, fontWeight = FontWeight.Bold)
                 Spacer(Modifier.height(20.dp))
-                Instruction("01", "表示する過去を選ぶ", "Google マップの「他の日付を見る」から風景を選び、共有メニューで平成カメラに送るか、リンクを貼り付けます。前回の選択は記憶されます。")
-                Instruction("02", "カメラをかざす", "起動すると今の風景がカメラに映ります。プレビューだけに使用し、写真の撮影・保存や映像の送信は行いません。")
-                Instruction("03", "シャッターで過去に切り替える", "丸いボタンで、選んだ Street View を表示します。画像ファイルに変換せず、見回し操作を止めた埋め込み表示です。読み込み中の表示は変わることがあります。")
-                Instruction("04", "もう一度、いまを見る", "「現在に戻る」でカメラ表示へ。しおりには選んだ風景のリンクを残せます。カメラの位置・向きと Street View は自動では一致しません。")
+                Instruction("01", "カメラをかざす", "起動すると背面カメラで今の風景を表示します。写真の保存やカメラ映像の送信は行いません。")
+                Instruction("02", "シャッターで現在地を取得", "位置情報を許可すると、GPSやネットワークで現在地を取得します。アプリを閉じている間は測位しません。")
+                Instruction("03", "この付近の Street View を見る", "Google が現在地付近から選ぶ画像を表示します。最古・平成時代の画像を指定する機能はありません。カメラの向きとは連動しません。")
+                Instruction("04", "過去の画像を自分で選ぶ", "「風景を選ぶ」から共有リンクを指定できます。Google マップの「他の日付を見る」で選んだ画像のリンクを取り込みます。共有リンクで選んだ風景には、しおりを付けられます。")
                 HorizontalDivider(color = Muted.copy(alpha = .2f), modifier = Modifier.padding(vertical = 12.dp))
                 Text("接続情報", fontWeight = FontWeight.Bold)
-                Text(if (BuildConfig.HAS_EMBED_KEY) "過去の風景の表示：設定済み" else "過去の風景の表示：API キー未設定", color = Muted, fontSize = 13.sp, modifier = Modifier.padding(top = 8.dp))
+                Text(if (BuildConfig.HAS_EMBED_KEY) "Street View の表示：設定済み" else "Street View の表示：API キー未設定", color = Muted, fontSize = 13.sp, modifier = Modifier.padding(top = 8.dp))
                 Text("Maps Embed API の表示料金は無料です。開発者による API キーの設定が必要です。", color = Muted, fontSize = 13.sp, modifier = Modifier.padding(top = 12.dp))
                 TextButton(onClick = { openExternal(context, "https://github.com/hatake716/heisei-camera#ローカル設定") { session.message = it } }) { Text("開発者向けの設定手順") }
-                TextButton(onClick = { openExternal(context, "package:${context.packageName}", appSettings = true) { session.message = it } }) { Text("カメラの許可を変更する") }
+                TextButton(onClick = { openExternal(context, "package:${context.packageName}", appSettings = true) { session.message = it } }) { Text("カメラ・位置情報の許可を変更する") }
                 TextButton(onClick = { openExternal(context, "https://github.com/hatake716/heisei-camera/blob/main/docs/PRIVACY.md") { session.message = it } }) { Text("プライバシーポリシー") }
                 TextButton(onClick = { openExternal(context, "https://maps.google.com/help/terms_maps/") { session.message = it } }) { Text("Google マップの利用規約") }
             }
@@ -213,7 +316,7 @@ fun HeiseiCameraApp(incomingLink: String?, consumeLink: () -> Unit) {
 
         if (dialog == "bookmarks") ModalBottomSheet(onDismissRequest = { dialog = null }, containerColor = Panel) {
             Text("選んだ風景のしおり", fontSize = 23.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(horizontal = 24.dp, vertical = 12.dp))
-            if (session.bookmarks.isEmpty()) Text("過去の画面でしおりを付けると、選んだ風景のリンクをここから呼び出せます。", color = Muted, modifier = Modifier.padding(24.dp).padding(bottom = 30.dp))
+            if (session.bookmarks.isEmpty()) Text("共有リンクで選んだ風景にしおりを付けると、ここから呼び出せます。", color = Muted, modifier = Modifier.padding(24.dp).padding(bottom = 30.dp))
             else LazyColumn(Modifier.fillMaxWidth().heightIn(max = 420.dp).padding(bottom = 28.dp)) {
                 itemsIndexed(session.bookmarks, key = { _, value -> value.panoId }) { index, value ->
                     Row(Modifier.fillMaxWidth().clickable {
@@ -234,14 +337,14 @@ fun HeiseiCameraApp(incomingLink: String?, consumeLink: () -> Unit) {
 
 @Composable
 private fun Finder(
-    session: CameraSession, showPast: Boolean, cameraGranted: Boolean, cameraState: CameraPreviewState,
+    session: CameraSession, showStreetView: Boolean, cameraGranted: Boolean, cameraState: CameraPreviewState,
     cameraEpoch: Int, onCameraState: (CameraPreviewState) -> Unit, requestCamera: () -> Unit,
     retryCamera: () -> Unit, openMaps: () -> Unit, modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
     Column(modifier.clip(RoundedCornerShape(14.dp)).background(Panel)) {
         BoxWithConstraints(Modifier.weight(1f).fillMaxWidth().background(Color(0xFF101010))) {
-            if (!showPast) {
+            if (!showStreetView) {
                 if (cameraGranted) {
                     key(cameraEpoch) { LiveCameraPreview(onState = onCameraState, modifier = Modifier.fillMaxSize()) }
                     if (cameraState == CameraPreviewState.STARTING) FinderMessage("カメラを準備中", "") { CircularProgressIndicator(Modifier.size(28.dp), color = Accent, strokeWidth = 2.dp) }
@@ -254,28 +357,28 @@ private fun Finder(
                     TextButton(onClick = { openExternal(context, "package:${context.packageName}", appSettings = true) { session.message = it } }) { Text("端末の設定を開く") }
                 }
             } else if (!BuildConfig.HAS_EMBED_KEY) {
-                FinderMessage("過去の風景の表示を設定", "このビルドは API キー未設定です。\n選んだリンクは Google マップで開けます。") {
+                FinderMessage("Street View の表示を設定", "このビルドは API キー未設定です。\nGoogle マップで風景を開けます。") {
                     Button(onClick = openMaps) { Text("Google マップで開く ↗") }
                     TextButton(onClick = { openExternal(context, "https://github.com/hatake716/heisei-camera#ローカル設定") { session.message = it } }) { Text("設定手順を見る") }
                 }
             } else if (maxWidth < 200.dp || maxHeight < 200.dp) {
-                FinderMessage("画面を広げてください", "過去の風景を表示するには、端末の向きやウィンドウの大きさを変更してください。") {}
+                FinderMessage("画面を広げてください", "Street View を表示するには、端末の向きやウィンドウの大きさを変更してください。") {}
             } else {
-                val id = session.selectedPano
-                if (id != null) {
+                val target = session.target
+                if (target != null) {
                     val epoch = session.viewEpoch
-                    if (session.pageState != EmbedPageState.FAILED) key(id, epoch) {
-                        EmbedViewer(request = EmbedRequest(panoId = id, apiKey = BuildConfig.EMBED_API_KEY), frozen = true,
-                            onPageState = { session.markPageState(id, epoch, it) }, modifier = Modifier.fillMaxSize())
+                    if (session.pageState != EmbedPageState.FAILED) key(target, epoch) {
+                        EmbedViewer(request = EmbedRequest(target = target, apiKey = BuildConfig.EMBED_API_KEY), frozen = true,
+                            onPageState = { session.markPageState(target, epoch, it) }, modifier = Modifier.fillMaxSize())
                     }
-                    if (session.pageState == EmbedPageState.FAILED) FinderMessage("過去の風景を開けませんでした", "通信状態を確認して再度お試しください。") {
+                    if (session.pageState == EmbedPageState.FAILED) FinderMessage("Street View を開けませんでした", "通信状態を確認して再度お試しください。") {
                         Button(onClick = { session.retry() }) { Text("読み込み直す") }
                         TextButton(onClick = openMaps) { Text("Google マップで開く ↗") }
                     }
                 }
             }
         }
-        if (!showPast) Row(Modifier.fillMaxWidth().background(Ink).height(58.dp).padding(horizontal = 14.dp), verticalAlignment = Alignment.CenterVertically) {
+        if (!showStreetView) Row(Modifier.fillMaxWidth().background(Ink).height(58.dp).padding(horizontal = 14.dp), verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
                 Text("今、この場所", color = Muted, fontSize = 10.sp)
                 Text("LIVE CAMERA", color = Cream, fontSize = 12.sp, letterSpacing = 1.sp)
@@ -288,54 +391,78 @@ private fun Finder(
 
 @Composable
 private fun CameraControls(
-    session: CameraSession, showPast: Boolean, cameraReady: Boolean, shutter: () -> Unit,
+    session: CameraSession, showStreetView: Boolean, cameraReady: Boolean, shutter: () -> Unit,
     returnToCamera: () -> Unit, selectScene: () -> Unit, bookmarks: () -> Unit,
-    compact: Boolean, modifier: Modifier = Modifier,
+    openMaps: () -> Unit, locating: Boolean, compact: Boolean, modifier: Modifier = Modifier,
 ) {
+    val automaticResult = showStreetView && session.isAutomatic
+    val sideAction: () -> Unit = when {
+        automaticResult -> openMaps
+        showStreetView -> { { session.saveBookmark(); Unit } }
+        else -> bookmarks
+    }
+    val sideLabel = when {
+        automaticResult -> "マップで見る"
+        showStreetView -> "しおりに残す"
+        else -> "しおり ${session.bookmarks.size}"
+    }
+    val ready = cameraReady && !session.importing && !locating
     Column(modifier.fillMaxWidth().padding(vertical = if (compact) 0.dp else 12.dp), horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = if (compact) Arrangement.SpaceEvenly else Arrangement.spacedBy(10.dp)) {
-        Text(if (session.importing) "風景のリンクを確認中…" else if (session.selectedPano == null) "まずはシャッターで映す過去を選ぼう" else if (showPast) "選んだ過去を、眺める。" else "過去の風景を選択済み", color = Muted,
-            fontSize = 12.sp, textAlign = TextAlign.Center)
+        Text(when {
+            locating -> "現在地を取得中…"
+            session.importing -> "風景のリンクを確認中…"
+            automaticResult -> "この付近の風景・撮影時期の指定なし"
+            showStreetView -> "選んだ風景を、眺める。"
+            session.isAutomatic -> "シャッターで現在地の風景を自動表示"
+            else -> "共有リンクの風景を選択中"
+        }, color = Muted, fontSize = 12.sp, textAlign = TextAlign.Center)
         if (compact) {
-            ShutterButton(showPast, cameraReady && !session.importing, if (showPast) returnToCamera else shutter)
-            TextButton(onClick = selectScene, enabled = !session.importing) { Icon(Icons.Outlined.History, null, Modifier.size(18.dp)); Spacer(Modifier.width(6.dp)); Text("過去を選ぶ") }
-            TextButton(onClick = if (showPast) ({ session.saveBookmark(); Unit }) else bookmarks) { Text(if (showPast) "しおりに残す" else "しおり ${session.bookmarks.size}") }
-            if (showPast) TextButton(onClick = { session.retry() }) { Text("読み込み直す") }
+            ShutterButton(showStreetView, ready, if (showStreetView) returnToCamera else shutter)
+            TextButton(onClick = selectScene, enabled = !session.importing) { Icon(Icons.Outlined.History, null, Modifier.size(18.dp)); Spacer(Modifier.width(6.dp)); Text("風景を選ぶ") }
+            TextButton(onClick = sideAction) { Text(sideLabel) }
+            if (showStreetView) TextButton(onClick = { session.retry() }) { Text("読み込み直す") }
         } else Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.width(82.dp).clip(RoundedCornerShape(12.dp)).clickable(enabled = !session.importing, onClick = selectScene).padding(vertical = 10.dp), horizontalAlignment = Alignment.CenterHorizontally) {
                 Box(Modifier.size(44.dp).clip(CircleShape).background(Panel), contentAlignment = Alignment.Center) {
-                    Icon(Icons.Outlined.History, "過去を選ぶ", tint = Cream, modifier = Modifier.size(24.dp))
+                    Icon(Icons.Outlined.History, "風景を選ぶ", tint = Cream, modifier = Modifier.size(24.dp))
                 }
-                Text("過去を選ぶ", color = Muted, fontSize = 12.sp, modifier = Modifier.padding(top = 6.dp))
+                Text("風景を選ぶ", color = Muted, fontSize = 12.sp, modifier = Modifier.padding(top = 6.dp))
             }
-            ShutterButton(showPast, cameraReady && !session.importing, if (showPast) returnToCamera else shutter)
-            Column(Modifier.width(82.dp).clip(RoundedCornerShape(12.dp)).clickable {
-                if (showPast) session.saveBookmark() else bookmarks()
-            }.padding(vertical = 10.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+            ShutterButton(showStreetView, ready, if (showStreetView) returnToCamera else shutter)
+            Column(Modifier.width(82.dp).clip(RoundedCornerShape(12.dp)).clickable(onClick = sideAction)
+                .padding(vertical = 10.dp), horizontalAlignment = Alignment.CenterHorizontally) {
                 Box(Modifier.size(44.dp).border(1.5.dp, StoryGradient, CircleShape).padding(2.dp).clip(CircleShape).background(Panel), contentAlignment = Alignment.Center) {
-                    Icon(if (showPast) Icons.Outlined.BookmarkAdd else Icons.Outlined.CollectionsBookmark,
-                        if (showPast) "選んだ風景をしおりに残す" else "しおり一覧", tint = Cream, modifier = Modifier.size(22.dp))
+                    Icon(when {
+                        automaticResult -> Icons.Outlined.Map
+                        showStreetView -> Icons.Outlined.BookmarkAdd
+                        else -> Icons.Outlined.CollectionsBookmark
+                    }, when {
+                        automaticResult -> "現在地付近をGoogleマップで開く"
+                        showStreetView -> "選んだ風景をしおりに残す"
+                        else -> "しおり一覧"
+                    }, tint = Cream, modifier = Modifier.size(22.dp))
                 }
-                Text(if (showPast) "しおりに残す" else "しおり ${session.bookmarks.size}", color = Muted, fontSize = 12.sp, modifier = Modifier.padding(top = 6.dp))
+                Text(sideLabel, color = Muted, fontSize = 12.sp, modifier = Modifier.padding(top = 6.dp))
             }
         }
-        if (!compact && showPast) TextButton(onClick = { session.retry() }, contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp), modifier = Modifier.height(48.dp)) { Text("読み込み直す", fontSize = 12.sp) }
+        if (!compact && showStreetView) TextButton(onClick = { session.retry() }, contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp), modifier = Modifier.height(48.dp)) { Text("読み込み直す", fontSize = 12.sp) }
     }
 }
 
 @Composable
-private fun ShutterButton(showPast: Boolean, ready: Boolean, onClick: () -> Unit) {
+private fun ShutterButton(showStreetView: Boolean, ready: Boolean, onClick: () -> Unit) {
     Column(horizontalAlignment = Alignment.CenterHorizontally) {
-        val enabled = ready || showPast
-        val ring = if (showPast) Modifier.border(3.dp, StoryGradient, CircleShape)
+        val enabled = ready || showStreetView
+        val ring = if (showStreetView) Modifier.border(3.dp, StoryGradient, CircleShape)
             else Modifier.border(3.dp, if (enabled) Cream else Muted.copy(alpha = .45f), CircleShape)
         Box(Modifier.size(82.dp).then(ring).padding(7.dp).clip(CircleShape)
             .background(if (enabled) Cream else Color(0xFF383838))
             .clickable(enabled = enabled, onClick = onClick)
-            .semantics { contentDescription = if (showPast) "現在のカメラに戻る" else "シャッター・過去の風景を表示" }, contentAlignment = Alignment.Center) {
-            if (showPast) Icon(Icons.Outlined.CameraAlt, null, tint = Ink, modifier = Modifier.size(28.dp))
+            .semantics { contentDescription = if (showStreetView) "現在のカメラに戻る" else "シャッター・ストリートビューを表示" }, contentAlignment = Alignment.Center) {
+            if (showStreetView) Icon(Icons.Outlined.CameraAlt, null, tint = Ink, modifier = Modifier.size(28.dp))
         }
-        Text(if (showPast) "現在に戻る" else "シャッター", color = Cream, fontWeight = FontWeight.Medium,
+        Text(if (showStreetView) "現在に戻る" else "シャッター", color = Cream, fontWeight = FontWeight.Medium,
             fontSize = 12.sp, modifier = Modifier.padding(top = 8.dp))
     }
 }
@@ -380,9 +507,16 @@ private fun Instruction(number: String, title: String, body: String) {
 private fun hasCameraPermission(context: Context) =
     ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
 
-internal fun mapsUrl(panoId: String? = null): String {
+private fun hasLocationPermission(context: Context) =
+    ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED ||
+        ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
+
+internal fun mapsUrl(target: StreetViewTarget): String {
     val builder = Uri.parse("https://www.google.com/maps/@").buildUpon().appendQueryParameter("api", "1").appendQueryParameter("map_action", "pano")
-    if (panoId != null) builder.appendQueryParameter("pano", panoId)
+    when (target) {
+        is StreetViewTarget.Panorama -> builder.appendQueryParameter("pano", target.panoId)
+        is StreetViewTarget.Nearby -> builder.appendQueryParameter("viewpoint", "${target.location.latitude},${target.location.longitude}")
+    }
     return builder.build().toString()
 }
 

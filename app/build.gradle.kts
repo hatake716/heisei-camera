@@ -20,8 +20,8 @@ android {
         applicationId = "io.github.hatake716.heiseicamera"
         minSdk = 29
         targetSdk = 36
-        versionCode = 3
-        versionName = "0.2.1"
+        versionCode = 4
+        versionName = "0.3.0"
         buildConfigField("String", "EMBED_API_KEY", quoted(secret("MAPS_EMBED_API_KEY")))
         buildConfigField("boolean", "HAS_EMBED_KEY", secret("MAPS_EMBED_API_KEY").isNotBlank().toString())
     }

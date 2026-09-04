@@ -16,8 +16,12 @@ data class Bookmark(val panoId: String, val createdAt: Long)
 
 class CameraSession(private val context: Context, private val scope: CoroutineScope) {
     private val prefs = context.getSharedPreferences("panorama_bookmarks", Context.MODE_PRIVATE)
-    private var viewer by mutableStateOf(CameraViewerState(selectedPano = readLastSelection()))
-    val selectedPano: String? get() = viewer.selectedPano
+    private var viewer by mutableStateOf(CameraViewerState())
+    var selectedPano by mutableStateOf(readLastSelection())
+        private set
+    var isAutomatic by mutableStateOf(true)
+        private set
+    val target: StreetViewTarget? get() = viewer.target
     val viewEpoch: Int get() = viewer.epoch
     val pageState: EmbedPageState get() = viewer.pageState
 
@@ -83,37 +87,58 @@ class CameraSession(private val context: Context, private val scope: CoroutineSc
             message = "このリンクのパノラマを開けません。Google マップからもう一度共有してください。"
             return
         }
-        viewer = viewer.select(panoId)
+        selectedPano = panoId
+        isAutomatic = false
+        viewer = viewer.select(StreetViewTarget.Panorama(panoId))
         prefs.edit().putString("selected_pano", panoId).apply()
-        message = "過去の風景を選びました。"
+        message = "風景を選びました。"
     }
 
     fun retry() {
-        selectedPano?.let(::open)
+        target?.let { viewer = viewer.select(it) }
+        message = null
     }
 
-    fun markPageState(panoId: String, epoch: Int, state: EmbedPageState) {
-        if (!viewer.matches(panoId, epoch)) return
-        viewer = viewer.pageChanged(panoId, epoch, state)
+    fun selectAutomatic() {
+        cancelImport()
+        isAutomatic = true
+        viewer = viewer.select(null)
+        message = null
+    }
+
+    /** Restore only a request consistent with the restored mode and manual selection. */
+    fun restoreTarget(value: StreetViewTarget) {
+        val matchesMode = when (value) {
+            is StreetViewTarget.Nearby -> isAutomatic
+            is StreetViewTarget.Panorama -> !isAutomatic && selectedPano == value.panoId
+        }
+        if (matchesMode) viewer = viewer.select(value)
+    }
+
+    fun markPageState(target: StreetViewTarget, epoch: Int, state: EmbedPageState) {
+        if (!viewer.matches(target, epoch)) return
+        viewer = viewer.pageChanged(target, epoch, state)
     }
 
     /** Opens a read-only live WebView result; no bitmap or image file is created. */
-    fun shutter(): Boolean {
+    fun shutter(location: SceneLocation? = null): Boolean {
         if (importing) return false
-        val id = selectedPano ?: return false
-        // Each camera-to-past transition creates a fresh iframe, including the same selection.
-        viewer = viewer.select(id)
+        val selected = shutterTarget(isAutomatic, selectedPano, location) ?: return false
+        // Each shutter press creates a fresh iframe, including repeated requests for one place.
+        viewer = viewer.select(selected)
         message = null
         return true
     }
 
     fun resume() {
-        viewer = selectedPano?.let(viewer::select) ?: viewer
+        viewer = viewer.select(null)
         message = null
     }
 
     fun saveBookmark(): Boolean {
-        val id = selectedPano ?: return false
+        if (isAutomatic) return false
+        val id = (target as? StreetViewTarget.Panorama)?.panoId ?: return false
+        if (id != selectedPano) return false
         val entry = Bookmark(id, System.currentTimeMillis())
         bookmarks = (listOf(entry) + bookmarks.filterNot { it.panoId == id }).take(100)
         persistBookmarks()

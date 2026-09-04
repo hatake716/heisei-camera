@@ -6,7 +6,7 @@ import java.net.URLEncoder
 /** The view direction is an initial value; Maps Embed does not expose the user's later pose. */
 @Immutable
 data class EmbedRequest(
-    val panoId: String,
+    val target: StreetViewTarget,
     val apiKey: String,
     val heading: Float? = null,
     val pitch: Float? = null,
@@ -19,16 +19,20 @@ internal object EmbedDocument {
     private const val ENDPOINT = "https://www.google.com/maps/embed/v1/streetview"
 
     fun url(request: EmbedRequest): String {
-        require(PanoramaLinks.validPanoId(request.panoId)) { "Invalid panorama identifier" }
         require(request.apiKey.isNotBlank()) { "Maps Embed API key is required" }
         require(request.heading == null || request.heading.isFinite() && request.heading in -180f..360f)
         require(request.pitch == null || request.pitch.isFinite() && request.pitch in -90f..90f)
         require(request.fov == null || request.fov.isFinite() && request.fov in 10f..100f)
-        val parameters = linkedMapOf("key" to request.apiKey, "pano" to request.panoId)
+        val parameters = linkedMapOf("key" to request.apiKey)
+        when (val target = request.target) {
+            is StreetViewTarget.Panorama -> parameters["pano"] = target.panoId
+            is StreetViewTarget.Nearby -> parameters["location"] =
+                "${target.location.latitude},${target.location.longitude}"
+        }
         request.heading?.let { parameters["heading"] = it.toString() }
         request.pitch?.let { parameters["pitch"] = it.toString() }
         request.fov?.let { parameters["fov"] = it.toString() }
-        // No location fallback: an unavailable historical ID must not select a newer scene.
+        // Targets are exclusive: an unavailable historical ID never falls back to a nearby scene.
         return ENDPOINT + parameters.entries.joinToString("&", prefix = "?") {
             "${it.key}=${URLEncoder.encode(it.value, "UTF-8")}"
         }
@@ -42,7 +46,7 @@ internal object EmbedDocument {
             <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
             <meta name="referrer" content="strict-origin-when-cross-origin">
             <meta http-equiv="Content-Security-Policy" content="default-src 'none'; frame-src https://www.google.com; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'">
-            <title>選んだ過去の風景</title>
+            <title>Google ストリートビュー</title>
             <style>
               html, body { width:100%; height:100%; margin:0; background:#101815; overflow:hidden; }
               iframe { display:block; width:100%; height:100%; min-width:200px; min-height:200px; border:0; }
