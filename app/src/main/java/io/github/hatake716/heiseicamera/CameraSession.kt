@@ -31,6 +31,9 @@ class CameraSession(private val context: Context, private val scope: CoroutineSc
     /** Saved only with Activity state so interrupted short-link resolution can be resumed. */
     var pendingImportLink by mutableStateOf<String?>(null)
         private set
+    /** A successful import can open the result once, including after Activity recreation. */
+    var importedSelectionPending by mutableStateOf(false)
+        private set
     var bookmarks by mutableStateOf(readBookmarks())
         private set
 
@@ -43,6 +46,7 @@ class CameraSession(private val context: Context, private val scope: CoroutineSc
         importJob = null
         importing = false
         pendingImportLink = null
+        importedSelectionPending = false
     }
 
     fun importLink(text: String) {
@@ -63,6 +67,7 @@ class CameraSession(private val context: Context, private val scope: CoroutineSc
                     // open() invalidates earlier imports without cancelling this successful job.
                     importJob = null
                     open(reference.panoId)
+                    importedSelectionPending = true
                 }
             } catch (cancelled: CancellationException) {
                 throw cancelled
@@ -115,6 +120,23 @@ class CameraSession(private val context: Context, private val scope: CoroutineSc
         if (matchesMode) viewer = viewer.select(value)
     }
 
+    /** Call after restoring the mode and target, before restoring any newer pending import. */
+    fun restoreImportedSelectionPending(pending: Boolean) {
+        importedSelectionPending = pending && hasSelectedPanorama()
+    }
+
+    /** The UI shows the result only when this succeeds; stale or cancelled events are discarded. */
+    fun consumeImportedSelection(): Boolean {
+        val shouldShow = importedSelectionPending && hasSelectedPanorama()
+        importedSelectionPending = false
+        return shouldShow
+    }
+
+    private fun hasSelectedPanorama(): Boolean {
+        val panorama = target as? StreetViewTarget.Panorama ?: return false
+        return !isAutomatic && !importing && panorama.panoId == selectedPano
+    }
+
     fun markPageState(target: StreetViewTarget, epoch: Int, state: EmbedPageState) {
         if (!viewer.matches(target, epoch)) return
         viewer = viewer.pageChanged(target, epoch, state)
@@ -124,6 +146,7 @@ class CameraSession(private val context: Context, private val scope: CoroutineSc
     fun shutter(location: SceneLocation? = null): Boolean {
         if (importing) return false
         val selected = shutterTarget(isAutomatic, selectedPano, location) ?: return false
+        importedSelectionPending = false
         // Each shutter press creates a fresh iframe, including repeated requests for one place.
         viewer = viewer.select(selected)
         message = null
@@ -131,6 +154,7 @@ class CameraSession(private val context: Context, private val scope: CoroutineSc
     }
 
     fun resume() {
+        cancelImport()
         viewer = viewer.select(null)
         message = null
     }
